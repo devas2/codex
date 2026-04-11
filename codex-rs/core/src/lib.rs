@@ -44,6 +44,7 @@ mod hook_runtime;
 mod installation_id;
 pub(crate) mod landlock;
 pub use landlock::spawn_command_under_linux_sandbox;
+pub(crate) mod macos_denials;
 pub(crate) mod mcp;
 mod mcp_skill_dependencies;
 mod mcp_tool_approval_templates;
