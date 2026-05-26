@@ -1688,6 +1688,7 @@ impl PluginRequestProcessor {
             );
 
             let store_mode = config.mcp_oauth_credentials_store_mode;
+            let keyring_backend_kind = config.auth_keyring_backend_kind();
             let callback_port = config.mcp_oauth_callback_port;
             let callback_url = config.mcp_oauth_callback_url.clone();
             let outgoing = Arc::clone(&self.outgoing);
@@ -1699,6 +1700,7 @@ impl PluginRequestProcessor {
                     &name,
                     &oauth_config.url,
                     store_mode,
+                    keyring_backend_kind,
                     oauth_config.http_headers.clone(),
                     oauth_config.env_http_headers.clone(),
                     &resolved_scopes.scopes,
@@ -1715,6 +1717,7 @@ impl PluginRequestProcessor {
                             &name,
                             &oauth_config.url,
                             store_mode,
+                            keyring_backend_kind,
                             oauth_config.http_headers,
                             oauth_config.env_http_headers,
                             &[],
