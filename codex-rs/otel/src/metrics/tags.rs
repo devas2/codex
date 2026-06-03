@@ -21,6 +21,7 @@ const KNOWN_ORIGINATOR_TAG_VALUES: &[&str] = &[
     "none",
     "codex_exec",
     "codex-cli",
+    "codex-exec-server",
     "codex_sdk_ts",
     "codex-app-server-sdk",
 ];
@@ -80,6 +81,7 @@ mod tests {
     use super::SERVICE_NAME_TAG;
     use super::SESSION_SOURCE_TAG;
     use super::SessionMetricTagValues;
+    use super::bounded_originator_tag_value;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -129,6 +131,14 @@ mod tests {
                 (MODEL_TAG, "gpt-5.1"),
                 (APP_VERSION_TAG, "1.2.3"),
             ]
+        );
+    }
+
+    #[test]
+    fn bounded_originator_tag_value_accepts_exec_server() {
+        assert_eq!(
+            bounded_originator_tag_value("codex-exec-server"),
+            "codex-exec-server"
         );
     }
 }

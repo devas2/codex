@@ -12,6 +12,7 @@ use crate::metrics::validation::validate_tags;
 use codex_utils_string::sanitize_metric_tag_value;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Counter;
+use opentelemetry::metrics::Gauge;
 use opentelemetry::metrics::Histogram;
 use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::MeterProvider as _;
@@ -42,8 +43,9 @@ use tracing::debug;
 
 const ENV_ATTRIBUTE: &str = "env";
 const METER_NAME: &str = "codex";
-const DURATION_UNIT: &str = "ms";
-const DURATION_DESCRIPTION: &str = "Duration in milliseconds.";
+const MILLISECOND_DURATION_UNIT: &str = "ms";
+const MILLISECOND_DURATION_DESCRIPTION: &str = "Duration in milliseconds.";
+const SECOND_DURATION_UNIT: &str = "s";
 
 #[derive(Clone, Debug)]
 struct SharedManualReader {
@@ -83,6 +85,7 @@ struct MetricsClientInner {
     meter_provider: SdkMeterProvider,
     meter: Meter,
     counters: Mutex<HashMap<String, Counter<u64>>>,
+    gauges: Mutex<HashMap<String, Gauge<i64>>>,
     histograms: Mutex<HashMap<String, Histogram<f64>>>,
     duration_histograms: Mutex<HashMap<String, Histogram<f64>>>,
     runtime_reader: Option<Arc<ManualReader>>,
@@ -90,7 +93,13 @@ struct MetricsClientInner {
 }
 
 impl MetricsClientInner {
-    fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
+    fn counter(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        inc: i64,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
         validate_metric_name(name)?;
         if inc < 0 {
             return Err(MetricsError::NegativeCounterIncrement {
@@ -104,9 +113,13 @@ impl MetricsClientInner {
             .counters
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let counter = counters
-            .entry(name.to_string())
-            .or_insert_with(|| self.meter.u64_counter(name.to_string()).build());
+        let counter = counters.entry(name.to_string()).or_insert_with(|| {
+            let builder = self.meter.u64_counter(name.to_string());
+            match description {
+                Some(description) => builder.with_description(description.to_string()).build(),
+                None => builder.build(),
+            }
+        });
         counter.add(inc as u64, &attributes);
         Ok(())
     }
@@ -126,7 +139,39 @@ impl MetricsClientInner {
         Ok(())
     }
 
-    fn duration_histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
+    fn gauge(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        value: i64,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
+        validate_metric_name(name)?;
+        let attributes = self.attributes(tags)?;
+
+        let mut gauges = self
+            .gauges
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let gauge = gauges.entry(name.to_string()).or_insert_with(|| {
+            let builder = self.meter.i64_gauge(name.to_string());
+            match description {
+                Some(description) => builder.with_description(description.to_string()).build(),
+                None => builder.build(),
+            }
+        });
+        gauge.record(value, &attributes);
+        Ok(())
+    }
+
+    fn duration_histogram(
+        &self,
+        name: &str,
+        value: f64,
+        unit: &'static str,
+        description: &str,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
         validate_metric_name(name)?;
         let attributes = self.attributes(tags)?;
 
@@ -137,11 +182,11 @@ impl MetricsClientInner {
         let histogram = histograms.entry(name.to_string()).or_insert_with(|| {
             self.meter
                 .f64_histogram(name.to_string())
-                .with_unit(DURATION_UNIT)
-                .with_description(DURATION_DESCRIPTION)
+                .with_unit(unit)
+                .with_description(description.to_string())
                 .build()
         });
-        histogram.record(value as f64, &attributes);
+        histogram.record(value, &attributes);
         Ok(())
     }
 
@@ -233,6 +278,7 @@ impl MetricsClient {
             meter_provider,
             meter,
             counters: Mutex::new(HashMap::new()),
+            gauges: Mutex::new(HashMap::new()),
             histograms: Mutex::new(HashMap::new()),
             duration_histograms: Mutex::new(HashMap::new()),
             runtime_reader,
@@ -242,12 +288,39 @@ impl MetricsClient {
 
     /// Send a single counter increment.
     pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
-        self.0.counter(name, inc, tags)
+        self.0.counter(name, /*description*/ None, inc, tags)
+    }
+
+    /// Send a single counter increment with an instrument description.
+    pub fn counter_with_description(
+        &self,
+        name: &str,
+        description: &str,
+        inc: i64,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
+        self.0.counter(name, Some(description), inc, tags)
     }
 
     /// Send a single histogram sample.
     pub fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
         self.0.histogram(name, value, tags)
+    }
+
+    /// Send a single gauge measurement.
+    pub fn gauge(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
+        self.0.gauge(name, /*description*/ None, value, tags)
+    }
+
+    /// Send a single gauge measurement with an instrument description.
+    pub fn gauge_with_description(
+        &self,
+        name: &str,
+        description: &str,
+        value: i64,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
+        self.0.gauge(name, Some(description), value, tags)
     }
 
     /// Record a duration in milliseconds using a histogram.
@@ -259,7 +332,26 @@ impl MetricsClient {
     ) -> Result<()> {
         self.0.duration_histogram(
             name,
-            duration.as_millis().min(i64::MAX as u128) as i64,
+            duration.as_millis().min(i64::MAX as u128) as f64,
+            MILLISECOND_DURATION_UNIT,
+            MILLISECOND_DURATION_DESCRIPTION,
+            tags,
+        )
+    }
+
+    /// Record a duration in seconds using a histogram with an instrument description.
+    pub fn record_duration_seconds_with_description(
+        &self,
+        name: &str,
+        description: &str,
+        duration: Duration,
+        tags: &[(&str, &str)],
+    ) -> Result<()> {
+        self.0.duration_histogram(
+            name,
+            duration.as_secs_f64(),
+            SECOND_DURATION_UNIT,
+            description,
             tags,
         )
     }
