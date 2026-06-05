@@ -1049,6 +1049,7 @@ impl Session {
                     ),
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+                tool_search_handler_cache: Default::default(),
                 environment_manager,
             };
             services
