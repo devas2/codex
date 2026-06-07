@@ -154,6 +154,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                parent_thread_id: None,
             },
         })
         .await?
