@@ -143,6 +143,7 @@ async fn lookup_session_by_exact_name(
                     /*include_non_interactive*/ false,
                 )),
                 archived: Some(matches!(action, SessionArchiveAction::Unarchive)),
+                parent_thread_id: None,
                 cwd: None,
                 use_state_db_only: false,
                 search_term: Some(name.to_string()),
