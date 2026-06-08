@@ -46,7 +46,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::assert_regex_match;
-use core_test_support::fs_wait;
 use core_test_support::remote_env_env_var;
 use core_test_support::responses;
 use core_test_support::responses::mount_models_once;
@@ -560,7 +559,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shutdown_does_not_wait_for_startup_prewarm_mcp_tool_listing() -> anyhow::Result<()> {
+async fn shutdown_cancels_startup_prewarm_waiting_for_mcp_startup() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_websocket_server(vec![vec![vec![
@@ -568,42 +567,38 @@ async fn shutdown_does_not_wait_for_startup_prewarm_mcp_tool_listing() -> anyhow
         responses::ev_completed("warm-1"),
     ]]])
     .await;
-    let temp_dir = tempdir()?;
-    let list_tools_started_file = temp_dir.path().join("list-tools-started");
-    let list_tools_started_file_env = list_tools_started_file.display().to_string();
-    let rmcp_test_server_bin = cargo_bin("test_stdio_server")?
-        .to_string_lossy()
-        .into_owned();
+    let pending_mcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let pending_mcp_url = format!("http://{}/mcp", pending_mcp_listener.local_addr()?);
 
     let fixture = test_codex()
         .with_config(move |config| {
             insert_mcp_server(
                 config,
-                "rmcp",
-                stdio_transport(
-                    rmcp_test_server_bin,
-                    Some(HashMap::from([
-                        (
-                            "MCP_TEST_LIST_TOOLS_STARTED_FILE".to_string(),
-                            list_tools_started_file_env,
-                        ),
-                        (
-                            "MCP_TEST_LIST_TOOLS_DELAY_MS".to_string(),
-                            "30000".to_string(),
-                        ),
-                    ])),
-                    Vec::new(),
-                ),
+                "shutdown_prewarm",
+                McpServerTransportConfig::StreamableHttp {
+                    url: pending_mcp_url,
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
                 TestMcpServerOptions::default(),
             );
         })
         .build_with_websocket_server(&server)
         .await?;
 
-    fs_wait::wait_for_path_exists(&list_tools_started_file, Duration::from_secs(5)).await?;
+    let (_pending_mcp_connection, _) =
+        tokio::time::timeout(Duration::from_secs(5), pending_mcp_listener.accept())
+            .await
+            .context("startup prewarm should start the MCP connection")??;
     tokio::time::timeout(Duration::from_secs(2), fixture.codex.shutdown_and_wait())
         .await
-        .context("shutdown should not wait for startup prewarm MCP tool listing")??;
+        .context("shutdown should not wait for startup prewarm MCP startup")??;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        server.connections().is_empty(),
+        "startup prewarm should not send a websocket request after shutdown"
+    );
 
     server.shutdown().await;
     Ok(())
