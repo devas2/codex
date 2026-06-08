@@ -1,5 +1,4 @@
 pub use connection_manager::McpConnectionManager;
-pub use connection_manager::McpToolListSnapshot;
 pub use connection_manager::tool_is_model_visible;
 pub use elicitation::ElicitationReviewRequest;
 pub use elicitation::ElicitationReviewer;
@@ -59,6 +58,7 @@ pub(crate) mod codex_apps;
 pub(crate) mod connection_manager;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;
+pub(crate) mod operation_gate;
 pub(crate) mod rmcp_client;
 pub(crate) mod runtime;
 pub(crate) mod server;

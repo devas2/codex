@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::mcp_connection_manager::McpConnectionManagerSlot;
 use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
@@ -24,7 +25,6 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
-use codex_mcp::McpConnectionManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_rollout::state_db::StateDbHandle;
@@ -34,12 +34,11 @@ use codex_thread_store::ThreadStore;
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
-    pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
+    pub(crate) mcp_connection_manager: McpConnectionManagerSlot,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]

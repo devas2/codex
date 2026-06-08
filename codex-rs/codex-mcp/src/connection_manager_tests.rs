@@ -981,10 +981,17 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
 }
 
 #[tokio::test]
-async fn list_all_tools_does_not_retain_manager_read_lock() {
-    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
-        .boxed()
-        .shared();
+async fn shutdown_cancels_pending_tool_listing() {
+    let cancel_token = CancellationToken::new();
+    let cancel_token_for_startup = cancel_token.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let pending_client = async move {
+        let _ = started_tx.send(());
+        cancel_token_for_startup.cancelled().await;
+        Err(StartupOutcomeError::Cancelled)
+    }
+    .boxed()
+    .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let permission_profile = Constrained::allow_any(PermissionProfile::default());
     let mut manager = McpConnectionManager::new_uninitialized(
@@ -1000,29 +1007,19 @@ async fn list_all_tools_does_not_retain_manager_read_lock() {
             cached_server_info: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            cancel_token: CancellationToken::new(),
+            cancel_token,
         },
     );
-    let manager = Arc::new(tokio::sync::RwLock::new(manager));
-    let list_task = {
-        let manager = manager.read().await;
-        tokio::spawn(manager.tool_list_snapshot().list_all_tools())
-    };
+    let manager = Arc::new(manager);
+    let manager_for_list = Arc::clone(&manager);
+    let list_task = tokio::spawn(async move { manager_for_list.list_all_tools().await });
 
-    tokio::task::yield_now().await;
-    {
-        let _write_guard = tokio::time::timeout(Duration::from_millis(10), manager.write())
-            .await
-            .expect("tool listing should not retain the manager read lock");
-    }
-
-    list_task.abort();
-    assert!(
-        list_task
-            .await
-            .expect_err("pending tool listing should abort")
-            .is_cancelled()
-    );
+    started_rx.await.expect("tool listing should start");
+    tokio::time::timeout(Duration::from_secs(1), manager.shutdown())
+        .await
+        .expect("shutdown should cancel speculative tool listing");
+    let tools = list_task.await.expect("tool listing task should not panic");
+    assert!(tools.is_empty());
 }
 
 #[tokio::test]

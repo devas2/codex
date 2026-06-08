@@ -46,6 +46,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::assert_regex_match;
+use core_test_support::fs_wait;
 use core_test_support::remote_env_env_var;
 use core_test_support::responses;
 use core_test_support::responses::mount_models_once;
@@ -555,6 +556,56 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     server.verify().await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_does_not_wait_for_startup_prewarm_mcp_tool_listing() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_websocket_server(vec![vec![vec![
+        responses::ev_response_created("warm-1"),
+        responses::ev_completed("warm-1"),
+    ]]])
+    .await;
+    let temp_dir = tempdir()?;
+    let list_tools_started_file = temp_dir.path().join("list-tools-started");
+    let list_tools_started_file_env = list_tools_started_file.display().to_string();
+    let rmcp_test_server_bin = cargo_bin("test_stdio_server")?
+        .to_string_lossy()
+        .into_owned();
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                "rmcp",
+                stdio_transport(
+                    rmcp_test_server_bin,
+                    Some(HashMap::from([
+                        (
+                            "MCP_TEST_LIST_TOOLS_STARTED_FILE".to_string(),
+                            list_tools_started_file_env,
+                        ),
+                        (
+                            "MCP_TEST_LIST_TOOLS_DELAY_MS".to_string(),
+                            "30000".to_string(),
+                        ),
+                    ])),
+                    Vec::new(),
+                ),
+                TestMcpServerOptions::default(),
+            );
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+
+    fs_wait::wait_for_path_exists(&list_tools_started_file, Duration::from_secs(5)).await?;
+    tokio::time::timeout(Duration::from_secs(2), fixture.codex.shutdown_and_wait())
+        .await
+        .context("shutdown should not wait for startup prewarm MCP tool listing")??;
+
+    server.shutdown().await;
     Ok(())
 }
 

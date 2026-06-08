@@ -21,6 +21,7 @@ use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationReviewerHandle;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::ToolPluginProvenance;
+use crate::operation_gate::McpOperationGate;
 use crate::rmcp_client::AsyncManagedClient;
 use crate::rmcp_client::DEFAULT_STARTUP_TIMEOUT;
 use crate::rmcp_client::MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC;
@@ -65,8 +66,10 @@ use rmcp::model::RequestId;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
 use serde_json::Value as JsonValue;
+use tokio::sync::OnceCell;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::Instrument;
 use tracing::instrument;
 use tracing::trace;
@@ -76,6 +79,8 @@ use tracing::warn;
 const MCP_UI_META_KEY: &str = "ui";
 const MCP_UI_VISIBILITY_META_KEY: &str = "visibility";
 const MCP_UI_MODEL_VISIBILITY: &str = "model";
+const MCP_MANAGER_RETIRED_MESSAGE: &str =
+    "MCP connection manager is no longer accepting operations";
 
 /// Returns whether a tool may be included in model-facing tool declarations.
 ///
@@ -110,57 +115,8 @@ pub struct McpConnectionManager {
     prefix_mcp_tool_names: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
-}
-
-/// An owned view of the MCP state needed to list tools.
-///
-/// Taking a snapshot allows callers to release synchronization around the
-/// connection manager before waiting for MCP clients to finish starting.
-pub struct McpToolListSnapshot {
-    clients: HashMap<String, AsyncManagedClient>,
-    server_metadata: HashMap<String, McpServerMetadata>,
-    prefix_mcp_tool_names: bool,
-}
-
-impl McpToolListSnapshot {
-    /// Returns all tools in this snapshot with model-visible names normalized.
-    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
-    pub async fn list_all_tools(self) -> Vec<ToolInfo> {
-        let mut tools = Vec::new();
-        for (server_name, managed_client) in self.clients {
-            let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
-            let startup_complete = managed_client
-                .startup_complete
-                .load(std::sync::atomic::Ordering::Acquire);
-            trace!(
-                server_name = %server_name,
-                has_cached_tool_info_snapshot,
-                startup_complete,
-                "waiting for MCP server tools while building tool list"
-            );
-            let Some(server_tools) = managed_client
-                .listed_tools()
-                .instrument(trace_span!(
-                    "list_tools_for_server",
-                    server_name = %server_name,
-                    has_cached_tool_info_snapshot,
-                    startup_complete
-                ))
-                .await
-            else {
-                continue;
-            };
-            trace!(
-                server_name = %server_name,
-                tool_count = server_tools.len(),
-                "listed MCP server tools while building tool list"
-            );
-            tools.extend(server_tools.into_iter().map(|tool| {
-                McpConnectionManager::with_server_metadata(&self.server_metadata, tool)
-            }));
-        }
-        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
-    }
+    operation_gate: McpOperationGate,
+    shutdown_complete: OnceCell<()>,
 }
 
 impl McpConnectionManager {
@@ -293,6 +249,8 @@ impl McpConnectionManager {
             prefix_mcp_tool_names,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: cancel_token.clone(),
+            operation_gate: McpOperationGate::new(),
+            shutdown_complete: OnceCell::new(),
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -336,29 +294,27 @@ impl McpConnectionManager {
                 /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
+            operation_gate: McpOperationGate::new(),
+            shutdown_complete: OnceCell::new(),
         }
     }
 
     pub fn has_servers(&self) -> bool {
-        !self.clients.is_empty()
-    }
-
-    /// Drain all MCP clients from this manager and return a future that stops
-    /// them and terminates their stdio server processes.
-    pub fn begin_shutdown(&mut self) -> impl std::future::Future<Output = ()> + Send + 'static {
-        self.startup_cancellation_token.cancel();
-        let clients = std::mem::take(&mut self.clients);
-        self.server_metadata.clear();
-        async move {
-            for client in clients.into_values() {
-                client.shutdown().await;
-            }
-        }
+        self.operation_gate.is_accepting() && !self.clients.is_empty()
     }
 
     /// Stop all MCP clients owned by this manager and terminate stdio server processes.
-    pub async fn shutdown(&mut self) {
-        self.begin_shutdown().await;
+    pub async fn shutdown(&self) {
+        self.startup_cancellation_token.cancel();
+        self.operation_gate.begin_retirement();
+        self.shutdown_complete
+            .get_or_init(|| async {
+                self.operation_gate.wait_for_operations().await;
+                for client in self.clients.values() {
+                    client.shutdown().await;
+                }
+            })
+            .await;
     }
 
     pub fn server_origin(&self, server_name: &str) -> Option<&str> {
@@ -409,12 +365,16 @@ impl McpConnectionManager {
         id: RequestId,
         response: ElicitationResponse,
     ) -> Result<()> {
+        let _operation = self.begin_operation()?;
         self.elicitation_requests
             .resolve(server_name, id, response)
             .await
     }
 
     pub async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
+        let Some(_operation) = self.operation_gate.begin_operation() else {
+            return false;
+        };
         let Some(async_managed_client) = self.clients.get(server_name) else {
             return false;
         };
@@ -429,6 +389,15 @@ impl McpConnectionManager {
         &self,
         required_servers: &[String],
     ) -> Vec<McpStartupFailure> {
+        let Some(_operation) = self.operation_gate.begin_operation() else {
+            return required_servers
+                .iter()
+                .map(|server| McpStartupFailure {
+                    server: server.clone(),
+                    error: MCP_MANAGER_RETIRED_MESSAGE.to_string(),
+                })
+                .collect();
+        };
         let mut failures = Vec::new();
         for server_name in required_servers {
             let Some(async_managed_client) = self.clients.get(server_name).cloned() else {
@@ -450,18 +419,52 @@ impl McpConnectionManager {
         failures
     }
 
-    /// Captures the state needed to list tools without retaining access to the manager.
-    pub fn tool_list_snapshot(&self) -> McpToolListSnapshot {
-        McpToolListSnapshot {
-            clients: self.clients.clone(),
-            server_metadata: self.server_metadata.clone(),
-            prefix_mcp_tool_names: self.prefix_mcp_tool_names,
-        }
-    }
-
     /// Returns all tools with model-visible names normalized.
+    ///
+    /// Tool listing is speculative startup work, so it intentionally does not
+    /// delay manager retirement. Shutdown cancels pending client startup.
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
-        self.tool_list_snapshot().list_all_tools().await
+        if !self.operation_gate.is_accepting() {
+            return Vec::new();
+        }
+
+        let mut tools = Vec::new();
+        for (server_name, managed_client) in &self.clients {
+            let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
+            let startup_complete = managed_client
+                .startup_complete
+                .load(std::sync::atomic::Ordering::Acquire);
+            trace!(
+                server_name = %server_name,
+                has_cached_tool_info_snapshot,
+                startup_complete,
+                "waiting for MCP server tools while building tool list"
+            );
+            let Some(server_tools) = managed_client
+                .listed_tools()
+                .instrument(trace_span!(
+                    "list_tools_for_server",
+                    server_name = %server_name,
+                    has_cached_tool_info_snapshot,
+                    startup_complete
+                ))
+                .await
+            else {
+                continue;
+            };
+            trace!(
+                server_name = %server_name,
+                tool_count = server_tools.len(),
+                "listed MCP server tools while building tool list"
+            );
+            tools.extend(
+                server_tools
+                    .into_iter()
+                    .map(|tool| self.with_server_metadata(tool)),
+            );
+        }
+        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
     }
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
@@ -470,6 +473,7 @@ impl McpConnectionManager {
     /// latest filtered tools are returned directly to the caller. On
     /// failure, the existing cache remains unchanged.
     pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<Vec<ToolInfo>> {
+        let _operation = self.begin_operation()?;
         let managed_client = self
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
@@ -511,7 +515,7 @@ impl McpConnectionManager {
             .into_iter()
             .map(|mut tool| {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                Self::with_server_metadata(&self.server_metadata, tool)
+                self.with_server_metadata(tool)
             });
         Ok(normalize_tools_for_model_with_prefix(
             tools,
@@ -522,6 +526,9 @@ impl McpConnectionManager {
     /// Returns a single map that contains all resources. Each key is the
     /// server name and the value is a vector of resources.
     pub async fn list_all_resources(&self) -> HashMap<String, Vec<Resource>> {
+        let Some(_operation) = self.operation_gate.begin_operation() else {
+            return HashMap::new();
+        };
         let mut join_set = JoinSet::new();
 
         let clients_snapshot = &self.clients;
@@ -587,6 +594,9 @@ impl McpConnectionManager {
     /// Returns a single map that contains all resource templates. Each key is the
     /// server name and the value is a vector of resource templates.
     pub async fn list_all_resource_templates(&self) -> HashMap<String, Vec<ResourceTemplate>> {
+        let Some(_operation) = self.operation_gate.begin_operation() else {
+            return HashMap::new();
+        };
         let mut join_set = JoinSet::new();
 
         let clients_snapshot = &self.clients;
@@ -661,6 +671,7 @@ impl McpConnectionManager {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
+        let _operation = self.begin_operation()?;
         let client = self.client_by_name(server).await?;
         if !client.tool_filter.allows(tool) {
             return Err(anyhow!(
@@ -695,6 +706,7 @@ impl McpConnectionManager {
         &self,
         server: &str,
     ) -> Result<bool> {
+        let _operation = self.begin_operation()?;
         Ok(self
             .client_by_name(server)
             .await?
@@ -707,6 +719,7 @@ impl McpConnectionManager {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
+        let _operation = self.begin_operation()?;
         let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
 
@@ -723,6 +736,7 @@ impl McpConnectionManager {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
+        let _operation = self.begin_operation()?;
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
@@ -739,6 +753,7 @@ impl McpConnectionManager {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
+        let _operation = self.begin_operation()?;
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
@@ -753,6 +768,9 @@ impl McpConnectionManager {
     /// Returns presentation metadata without waiting for uncached clients still initializing.
     /// Cached values will be used if available and the server is still starting up.
     pub(crate) async fn list_available_server_infos(&self) -> HashMap<String, McpServerInfo> {
+        let Some(_operation) = self.operation_gate.begin_operation() else {
+            return HashMap::new();
+        };
         let mut server_infos = HashMap::new();
         for (server_name, client) in &self.clients {
             if !client.startup_complete.load(Ordering::Acquire) {
@@ -775,11 +793,14 @@ impl McpConnectionManager {
         server_infos
     }
 
-    fn with_server_metadata(
-        server_metadata: &HashMap<String, McpServerMetadata>,
-        mut tool: ToolInfo,
-    ) -> ToolInfo {
-        let Some(metadata) = server_metadata.get(&tool.server_name) else {
+    fn begin_operation(&self) -> Result<TaskTrackerToken> {
+        self.operation_gate
+            .begin_operation()
+            .ok_or_else(|| anyhow!(MCP_MANAGER_RETIRED_MESSAGE))
+    }
+
+    fn with_server_metadata(&self, mut tool: ToolInfo) -> ToolInfo {
+        let Some(metadata) = self.server_metadata.get(&tool.server_name) else {
             tool.supports_parallel_tool_calls = false;
             tool.server_origin = None;
             return tool;

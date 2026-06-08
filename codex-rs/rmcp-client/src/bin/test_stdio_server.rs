@@ -418,6 +418,15 @@ impl ServerHandler for TestToolServer {
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let tools = self.tools.clone();
         async move {
+            if let Ok(started_file) = std::env::var("MCP_TEST_LIST_TOOLS_STARTED_FILE") {
+                let _ = std::fs::write(started_file, b"started");
+            }
+            if let Some(delay_ms) = std::env::var("MCP_TEST_LIST_TOOLS_DELAY_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+            {
+                sleep(Duration::from_millis(delay_ms)).await;
+            }
             Ok(ListToolsResult {
                 tools: (*tools).clone(),
                 next_cursor: None,

@@ -469,10 +469,6 @@ impl Session {
 
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "session initialization must serialize access through session-owned manager guards"
-    )]
     pub(crate) async fn new(
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
@@ -978,20 +974,18 @@ impl Session {
             }
 
             let services = SessionServices {
-                // Initialize the MCP connection manager with an uninitialized
-                // instance. It will be replaced with one created via
+                // Initialize the reloadable MCP manager slot with an
+                // uninitialized instance. It will be replaced with one created via
                 // McpConnectionManager::new() once all its constructor args are
                 // available. This also ensures `SessionConfigured` is emitted
-                // before any MCP-related events. It is reasonable to consider
-                // changing this to use Option or OnceCell, though the current
-                // setup is straightforward enough and performs well.
-                mcp_connection_manager: Arc::new(RwLock::new(
+                // before any MCP-related events.
+                mcp_connection_manager: McpConnectionManagerSlot::new(
                     McpConnectionManager::new_uninitialized_with_permission_profile(
                         &config.permissions.approval_policy,
                         config.permissions.permission_profile(),
                         config.prefix_mcp_tool_names(),
                     ),
-                )),
+                ),
                 mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
                 unified_exec_manager: UnifiedExecProcessManager::new(
                     config.background_terminal_max_timeout,
@@ -1189,10 +1183,11 @@ impl Session {
                 session_init.required_mcp_server_count = required_mcp_server_count,
             ))
             .await;
-            {
-                let mut manager_guard = sess.services.mcp_connection_manager.write().await;
-                *manager_guard = mcp_connection_manager;
-            }
+            let previous_manager = sess
+                .services
+                .mcp_connection_manager
+                .replace(mcp_connection_manager);
+            previous_manager.shutdown().await;
             {
                 let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
                 if cancel_guard.is_cancelled() {
@@ -1204,8 +1199,7 @@ impl Session {
                 let failures = sess
                     .services
                     .mcp_connection_manager
-                    .read()
-                    .await
+                    .current()
                     .required_startup_failures(&required_mcp_servers)
                     .instrument(info_span!(
                         "session_init.required_mcp_wait",
