@@ -486,17 +486,14 @@ impl OauthLoginFlow {
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
         let oauth_state = start_authorization(
             server_url,
+            oauth_resource,
             http_client,
             &scope_refs,
             &redirect_uri,
             oauth_client_id,
         )
         .await?;
-        let auth_url = append_query_param(
-            &oauth_state.get_authorization_url().await?,
-            "resource",
-            oauth_resource,
-        );
+        let auth_url = oauth_state.get_authorization_url().await?;
         let timeout_secs = timeout_secs.unwrap_or(DEFAULT_OAUTH_TIMEOUT_SECS).max(1);
         let timeout = Duration::from_secs(timeout_secs as u64);
 
@@ -603,11 +600,28 @@ impl OauthLoginFlow {
 
 async fn start_authorization(
     server_url: &str,
+    oauth_resource: Option<&str>,
     http_client: reqwest::Client,
     scopes: &[&str],
     redirect_uri: &str,
     oauth_client_id: Option<&str>,
 ) -> Result<OAuthState> {
+    let oauth_resource = oauth_resource
+        .map(str::trim)
+        .filter(|resource| !resource.is_empty());
+
+    if let Some(oauth_resource) = oauth_resource {
+        return start_authorization_with_resource(
+            server_url,
+            oauth_resource,
+            http_client,
+            scopes,
+            redirect_uri,
+            oauth_client_id,
+        )
+        .await;
+    }
+
     let Some(oauth_client_id) = oauth_client_id.filter(|client_id| !client_id.trim().is_empty())
     else {
         let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
@@ -632,28 +646,73 @@ async fn start_authorization(
     ))
 }
 
-fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
-    let Some(value) = value else {
-        return url.to_string();
+async fn start_authorization_with_resource(
+    server_url: &str,
+    oauth_resource: &str,
+    http_client: reqwest::Client,
+    scopes: &[&str],
+    redirect_uri: &str,
+    oauth_client_id: Option<&str>,
+) -> Result<OAuthState> {
+    let mut discovery_manager = AuthorizationManager::new(server_url).await?;
+    discovery_manager.with_client(http_client.clone())?;
+    let metadata = discovery_manager.discover_metadata().await?;
+    discovery_manager.set_metadata(metadata.clone());
+
+    let selected_scopes = select_authorization_scopes(&discovery_manager, scopes);
+    let selected_scope_refs: Vec<&str> = selected_scopes.iter().map(String::as_str).collect();
+
+    let mut auth_manager = AuthorizationManager::new(oauth_resource).await?;
+    auth_manager.with_client(http_client)?;
+    auth_manager.set_metadata(metadata);
+
+    let Some(oauth_client_id) = oauth_client_id.filter(|client_id| !client_id.trim().is_empty())
+    else {
+        let session = AuthorizationSession::new(
+            auth_manager,
+            &selected_scope_refs,
+            redirect_uri,
+            Some("Codex"),
+            None,
+        )
+        .await?;
+        return Ok(OAuthState::Session(session));
     };
-    let value = value.trim();
-    if value.is_empty() {
-        return url.to_string();
+
+    auth_manager.configure_client(
+        OAuthClientConfig::new(oauth_client_id, redirect_uri).with_scopes(selected_scopes.clone()),
+    )?;
+    let auth_url = auth_manager
+        .get_authorization_url(&selected_scope_refs)
+        .await?;
+
+    Ok(OAuthState::Session(
+        AuthorizationSession::for_scope_upgrade(auth_manager, auth_url, redirect_uri),
+    ))
+}
+
+fn select_authorization_scopes(
+    auth_manager: &AuthorizationManager,
+    scopes: &[&str],
+) -> Vec<String> {
+    if scopes.is_empty() {
+        return auth_manager.select_scopes(None, &[]);
     }
-    if let Ok(mut parsed) = Url::parse(url) {
-        parsed.query_pairs_mut().append_pair(key, value);
-        return parsed.to_string();
-    }
-    let encoded = urlencoding::encode(value);
-    let separator = if url.contains('?') { "&" } else { "?" };
-    format!("{url}{separator}{key}={encoded}")
+
+    let scopes = scopes.join(" ");
+    auth_manager.select_scopes(Some(&scopes), &[])
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
     use axum::Json;
     use axum::Router;
+    use axum::body::Bytes;
     use axum::routing::get;
+    use axum::routing::post;
     use pretty_assertions::assert_eq;
     use reqwest::Url;
     use serde_json::json;
@@ -662,7 +721,6 @@ mod tests {
     use super::CallbackOutcome;
     use super::OAuthProviderError;
     use super::append_callback_id_to_redirect_uri;
-    use super::append_query_param;
     use super::callback_id_from_server_url;
     use super::callback_path_from_redirect_uri;
     use super::parse_oauth_callback;
@@ -679,22 +737,13 @@ mod tests {
             "token_endpoint": format!("{base_url}/oauth/token"),
             "scopes_supported": [""],
         });
-        let path_scoped_metadata = metadata.clone();
-        let app = Router::new()
-            .route(
-                "/.well-known/oauth-authorization-server/mcp",
-                get(move || {
-                    let metadata = path_scoped_metadata.clone();
-                    async move { Json(metadata) }
-                }),
-            )
-            .route(
-                "/.well-known/oauth-authorization-server",
-                get(move || {
-                    let metadata = metadata.clone();
-                    async move { Json(metadata) }
-                }),
-            );
+        let app = Router::new().route(
+            "/.well-known/oauth-authorization-server/mcp",
+            get(move || {
+                let metadata = metadata.clone();
+                async move { Json(metadata) }
+            }),
+        );
 
         tokio::spawn(async move {
             axum::serve(listener, app)
@@ -705,11 +754,89 @@ mod tests {
         base_url
     }
 
+    async fn spawn_oauth_flow_server(
+        token_requests: Arc<Mutex<Vec<Vec<(String, String)>>>>,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind oauth flow listener");
+        let addr = listener.local_addr().expect("read oauth flow addr");
+        let base_url = format!("http://{addr}");
+        let metadata = json!({
+            "authorization_endpoint": format!("{base_url}/oauth/authorize"),
+            "token_endpoint": format!("{base_url}/oauth/token"),
+            "scopes_supported": [""],
+        });
+        let app = Router::new()
+            .route(
+                "/.well-known/oauth-authorization-server/mcp",
+                get(move || {
+                    let metadata = metadata.clone();
+                    async move { Json(metadata) }
+                }),
+            )
+            .route(
+                "/oauth/token",
+                post(move |body: Bytes| {
+                    let token_requests = Arc::clone(&token_requests);
+                    async move {
+                        let params = parse_form_body(&body);
+                        token_requests
+                            .lock()
+                            .expect("token request lock")
+                            .push(params);
+                        Json(json!({
+                            "access_token": "test-access-token",
+                            "token_type": "Bearer",
+                            "expires_in": 3600,
+                        }))
+                    }
+                }),
+            );
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve oauth flow");
+        });
+
+        base_url
+    }
+
+    fn parse_form_body(body: &[u8]) -> Vec<(String, String)> {
+        let body = std::str::from_utf8(body).expect("form body should be utf-8");
+        body.split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .map(|(key, value)| {
+                let key = urlencoding::decode(key)
+                    .expect("form key should decode")
+                    .into_owned();
+                let value = urlencoding::decode(value)
+                    .expect("form value should decode")
+                    .into_owned();
+                (key, value)
+            })
+            .collect()
+    }
+
+    fn query_values(url: &Url, key: &str) -> Vec<String> {
+        url.query_pairs()
+            .filter_map(|(name, value)| (name == key).then(|| value.into_owned()))
+            .collect()
+    }
+
+    fn form_values(params: &[(String, String)], key: &str) -> Vec<String> {
+        params
+            .iter()
+            .filter_map(|(name, value)| (name == key).then(|| value.clone()))
+            .collect()
+    }
+
     #[tokio::test]
     async fn start_authorization_uses_configured_client_id() {
         let base_url = spawn_oauth_metadata_server().await;
+        let server_url = format!("{base_url}/mcp");
         let oauth_state = start_authorization(
-            &format!("{base_url}/mcp"),
+            &server_url,
+            None,
             reqwest::Client::new(),
             &[],
             "http://127.0.0.1/callback",
@@ -729,6 +856,105 @@ mod tests {
             .map(|(_, value)| value.into_owned());
 
         assert_eq!(client_id.as_deref(), Some("eci-prd-pub-codex-123"));
+        assert_eq!(query_values(&auth_url, "resource"), vec![server_url]);
+    }
+
+    #[tokio::test]
+    async fn start_authorization_uses_server_url_in_token_exchange_by_default() {
+        let token_requests = Arc::new(Mutex::new(Vec::new()));
+        let base_url = spawn_oauth_flow_server(Arc::clone(&token_requests)).await;
+        let server_url = format!("{base_url}/mcp");
+        let mut oauth_state = start_authorization(
+            &server_url,
+            None,
+            reqwest::Client::new(),
+            &[],
+            "http://127.0.0.1/callback",
+            Some("eci-prd-pub-codex-123"),
+        )
+        .await
+        .expect("start oauth authorization");
+
+        let authorization_url = oauth_state
+            .get_authorization_url()
+            .await
+            .expect("read authorization url");
+        let auth_url = Url::parse(&authorization_url).expect("authorization url should parse");
+        let state = query_values(&auth_url, "state")
+            .into_iter()
+            .next()
+            .expect("authorization url should include state");
+
+        oauth_state
+            .handle_callback("test-code", &state)
+            .await
+            .expect("handle oauth callback");
+
+        let requests = token_requests.lock().expect("token request lock");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(form_values(&requests[0], "resource"), vec![server_url]);
+    }
+
+    #[tokio::test]
+    async fn start_authorization_uses_oauth_resource_in_authorization_url() {
+        let base_url = spawn_oauth_metadata_server().await;
+        let server_url = format!("{base_url}/mcp");
+        let oauth_resource = format!("{base_url}/resource");
+        let oauth_state = start_authorization(
+            &server_url,
+            Some(&oauth_resource),
+            reqwest::Client::new(),
+            &[],
+            "http://127.0.0.1/callback",
+            Some("eci-prd-pub-codex-123"),
+        )
+        .await
+        .expect("start oauth authorization");
+
+        let authorization_url = oauth_state
+            .get_authorization_url()
+            .await
+            .expect("read authorization url");
+        let auth_url = Url::parse(&authorization_url).expect("authorization url should parse");
+
+        assert_eq!(query_values(&auth_url, "resource"), vec![oauth_resource]);
+    }
+
+    #[tokio::test]
+    async fn start_authorization_uses_oauth_resource_in_token_exchange() {
+        let token_requests = Arc::new(Mutex::new(Vec::new()));
+        let base_url = spawn_oauth_flow_server(Arc::clone(&token_requests)).await;
+        let server_url = format!("{base_url}/mcp");
+        let oauth_resource = format!("{base_url}/resource");
+        let mut oauth_state = start_authorization(
+            &server_url,
+            Some(&oauth_resource),
+            reqwest::Client::new(),
+            &[],
+            "http://127.0.0.1/callback",
+            Some("eci-prd-pub-codex-123"),
+        )
+        .await
+        .expect("start oauth authorization");
+
+        let authorization_url = oauth_state
+            .get_authorization_url()
+            .await
+            .expect("read authorization url");
+        let auth_url = Url::parse(&authorization_url).expect("authorization url should parse");
+        let state = query_values(&auth_url, "state")
+            .into_iter()
+            .next()
+            .expect("authorization url should include state");
+
+        oauth_state
+            .handle_callback("test-code", &state)
+            .await
+            .expect("handle oauth callback");
+
+        let requests = token_requests.lock().expect("token request lock");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(form_values(&requests[0], "resource"), vec![oauth_resource]);
     }
 
     #[test]
@@ -832,37 +1058,5 @@ mod tests {
             redirect_uri,
             "https://callbacks.example.com/oauth/callback/abc123?provider=github"
         );
-    }
-
-    #[test]
-    fn append_query_param_adds_resource_to_absolute_url() {
-        let url = append_query_param(
-            "https://example.com/authorize?scope=read",
-            "resource",
-            Some("https://api.example.com"),
-        );
-
-        assert_eq!(
-            url,
-            "https://example.com/authorize?scope=read&resource=https%3A%2F%2Fapi.example.com"
-        );
-    }
-
-    #[test]
-    fn append_query_param_ignores_empty_values() {
-        let url = append_query_param(
-            "https://example.com/authorize?scope=read",
-            "resource",
-            Some("   "),
-        );
-
-        assert_eq!(url, "https://example.com/authorize?scope=read");
-    }
-
-    #[test]
-    fn append_query_param_handles_unparseable_url() {
-        let url = append_query_param("not a url", "resource", Some("api/resource"));
-
-        assert_eq!(url, "not a url?resource=api%2Fresource");
     }
 }
