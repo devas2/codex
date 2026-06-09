@@ -2,6 +2,8 @@ pub use codex_api::ResponseEvent;
 use codex_config::types::Personality;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_tools::ToolSpec;
@@ -36,6 +38,15 @@ pub struct Prompt {
 
     /// Whether the Responses API should strictly validate `output_schema`.
     pub output_schema_strict: bool,
+
+    pub(crate) image_detail_policy: RequestImageDetailPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum RequestImageDetailPolicy {
+    #[default]
+    Preserve,
+    StripForResponsesLite,
 }
 
 impl Default for Prompt {
@@ -48,6 +59,7 @@ impl Default for Prompt {
             personality: None,
             output_schema: None,
             output_schema_strict: true,
+            image_detail_policy: RequestImageDetailPolicy::Preserve,
         }
     }
 }
@@ -70,6 +82,58 @@ impl Prompt {
                     .unwrap_or(item)
             })
             .collect()
+    }
+
+    pub(crate) fn get_formatted_input_for_request(
+        &self,
+        use_responses_lite: bool,
+    ) -> Vec<ResponseItem> {
+        let mut input = self.get_formatted_input();
+        if use_responses_lite
+            && self.image_detail_policy == RequestImageDetailPolicy::StripForResponsesLite
+        {
+            strip_image_details(&mut input);
+        }
+        input
+    }
+}
+
+fn strip_image_details(items: &mut [ResponseItem]) {
+    for item in items {
+        match item {
+            ResponseItem::Message { content, .. } => {
+                for content_item in content {
+                    if let ContentItem::InputImage { detail, .. } = content_item {
+                        *detail = None;
+                    }
+                }
+            }
+            ResponseItem::FunctionCallOutput { output, .. }
+            | ResponseItem::CustomToolCallOutput { output, .. } => {
+                if let Some(content) = output.content_items_mut() {
+                    for content_item in content {
+                        if let FunctionCallOutputContentItem::InputImage { detail, .. } =
+                            content_item
+                        {
+                            *detail = None;
+                        }
+                    }
+                }
+            }
+            ResponseItem::Reasoning { .. }
+            | ResponseItem::AgentMessage { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger
+            | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::Other => {}
+        }
     }
 }
 

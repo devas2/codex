@@ -231,6 +231,7 @@ async fn run_compact_task_inner_impl(
             input: turn_input,
             base_instructions: sess.get_base_instructions().await,
             personality: turn_context.personality,
+            image_detail_policy: turn_context.request_image_detail_policy(),
             ..Default::default()
         };
         let window_id = sess.services.model_client.current_window_id();

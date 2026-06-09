@@ -1,6 +1,7 @@
 use super::*;
 use crate::SkillLoadOutcome;
 use crate::agents_md::LoadedAgentsMd;
+use crate::client_common::RequestImageDetailPolicy;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_core_skills::HostLoadedSkills;
@@ -112,6 +113,14 @@ enum TurnMultiAgentRuntime {
 }
 
 impl TurnContext {
+    pub(crate) fn request_image_detail_policy(&self) -> RequestImageDetailPolicy {
+        if self.features.enabled(Feature::ResizeAllImages) {
+            RequestImageDetailPolicy::StripForResponsesLite
+        } else {
+            RequestImageDetailPolicy::Preserve
+        }
+    }
+
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
     }
