@@ -150,7 +150,9 @@ impl TurnMetadataState {
         &self,
         context: McpTurnMetadataContext<'_>,
     ) -> Option<serde_json::Value> {
-        let Value::Object(mut metadata) = self.current_metadata().turn_metadata_value()? else {
+        let Value::Object(mut metadata) =
+            self.responses_metadata_template().turn_metadata_value()?
+        else {
             return None;
         };
         metadata.insert(
@@ -182,7 +184,7 @@ impl TurnMetadataState {
         Some(Value::Object(metadata))
     }
 
-    pub(crate) fn current_responses_metadata(
+    pub(crate) fn to_responses_metadata(
         &self,
         installation_id: String,
         window_id: String,
@@ -192,7 +194,7 @@ impl TurnMetadataState {
             installation_id,
             window_id,
             request_kind: Some(request_kind),
-            ..self.current_metadata()
+            ..self.responses_metadata_template()
         }
     }
 
@@ -220,7 +222,7 @@ impl TurnMetadataState {
             .cloned()
     }
 
-    fn current_metadata(&self) -> CodexResponsesMetadata {
+    fn responses_metadata_template(&self) -> CodexResponsesMetadata {
         CodexResponsesMetadata {
             turn_id: Some(self.turn_id.clone()),
             forked_from_thread_id: self.forked_from_thread_id,

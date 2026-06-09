@@ -37,7 +37,7 @@ fn test_responses_metadata_json(
     request_kind: CodexResponsesRequestKind,
 ) -> String {
     state
-        .current_responses_metadata(
+        .to_responses_metadata(
             "installation-a".to_string(),
             window_id.to_string(),
             request_kind,
@@ -64,7 +64,7 @@ fn test_compaction_responses_metadata_json(
 
 fn test_turn_metadata_header(state: &TurnMetadataState) -> String {
     state
-        .current_metadata()
+        .responses_metadata_template()
         .turn_metadata_json()
         .expect("header")
 }
@@ -122,9 +122,9 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
         &repo_path,
         Some("none"),
     )
-        .await
-        .turn_metadata_json()
-        .expect("header");
+    .await
+    .turn_metadata_json()
+    .expect("header");
     assert!(header.is_ascii());
     assert!(!header.contains("東京"));
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
@@ -168,9 +168,9 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
         &cwd,
         /*sandbox*/ None,
     )
-        .await
-        .turn_metadata_json()
-        .expect("detached memory should emit its request kind");
+    .await
+    .turn_metadata_json()
+    .expect("detached memory should emit its request kind");
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
 
     assert_eq!(parsed, serde_json::json!({"request_kind": "memory"}));

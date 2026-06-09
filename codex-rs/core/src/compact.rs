@@ -217,7 +217,7 @@ async fn run_compact_task_inner_impl(
     // Reuse one client session so turn-scoped state (sticky routing, websocket incremental
     // request tracking)
     // survives retries within this compact turn.
-    let responses_metadata = turn_context.turn_metadata_state.current_responses_metadata(
+    let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
         sess.installation_id.clone(),
         sess.services.model_client.current_window_id(),
         CodexResponsesRequestKind::Compaction(compaction_metadata),
