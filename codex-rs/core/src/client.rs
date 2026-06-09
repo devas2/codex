@@ -85,7 +85,6 @@ use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::create_tools_json_for_responses_api;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -113,11 +112,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::feedback_tags;
 use crate::responses_metadata::CodexResponsesMetadata;
-use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::subagent_header_value;
-use crate::responses_metadata::subagent_metadata_kind;
-use crate::turn_metadata::TurnMetadataState;
-use crate::turn_metadata::build_memory_responses_metadata;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
@@ -412,7 +407,7 @@ impl ModelClient {
         self.store_cached_websocket_session(WebsocketSession::default());
     }
 
-    pub(crate) fn current_window_id(&self) -> String {
+    pub fn current_window_id(&self) -> String {
         let thread_id = self.state.thread_id;
         let window_generation = self.state.window_generation.load(Ordering::Relaxed);
         format!("{thread_id}:{window_generation}")
@@ -649,57 +644,6 @@ impl ModelClient {
             );
         }
         extra_headers
-    }
-
-    pub fn request_metadata(&self, turn_id: Option<&str>) -> CodexResponsesMetadata {
-        CodexResponsesMetadata {
-            turn_id: turn_id.map(ToString::to_string),
-            request_kind: Some(CodexResponsesRequestKind::Turn),
-            parent_thread_id: self.state.parent_thread_id,
-            subagent_header: subagent_header_value(&self.state.session_source),
-            subagent_kind: subagent_metadata_kind(&self.state.session_source),
-            ..self.base_responses_metadata()
-        }
-    }
-
-    pub async fn memory_request_metadata(
-        &self,
-        cwd: &AbsolutePathBuf,
-        sandbox: Option<&str>,
-    ) -> CodexResponsesMetadata {
-        let mut metadata =
-            build_memory_responses_metadata(self.base_responses_metadata(), cwd, sandbox).await;
-        metadata.subagent_header = subagent_header_value(&self.state.session_source);
-        metadata
-    }
-
-    pub(crate) fn ws_connection_metadata(&self) -> CodexResponsesMetadata {
-        CodexResponsesMetadata {
-            parent_thread_id: self.state.parent_thread_id,
-            subagent_header: subagent_header_value(&self.state.session_source),
-            ..self.base_responses_metadata()
-        }
-    }
-
-    fn base_responses_metadata(&self) -> CodexResponsesMetadata {
-        CodexResponsesMetadata::new(
-            self.state.installation_id.clone(),
-            self.state.session_id.to_string(),
-            self.state.thread_id.to_string(),
-            self.current_window_id(),
-        )
-    }
-
-    pub(crate) fn responses_metadata(
-        &self,
-        turn_metadata_state: &TurnMetadataState,
-        request_kind: CodexResponsesRequestKind,
-    ) -> CodexResponsesMetadata {
-        turn_metadata_state.current_responses_metadata(
-            self.state.installation_id.clone(),
-            self.current_window_id(),
-            request_kind,
-        )
     }
 
     fn build_responses_compatibility_headers(
@@ -1142,6 +1086,7 @@ impl ModelClientSession {
         &mut self,
         session_telemetry: &SessionTelemetry,
         _model_info: &ModelInfo,
+        responses_metadata: &CodexResponsesMetadata,
     ) -> std::result::Result<(), ApiError> {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
@@ -1160,14 +1105,13 @@ impl ModelClientSession {
             client_setup.api_auth.as_ref(),
             PendingUnauthorizedRetry::default(),
         );
-        let responses_metadata = self.client.ws_connection_metadata();
         let connection = self
             .client
             .connect_websocket(
                 session_telemetry,
                 client_setup.api_provider,
                 client_setup.api_auth,
-                &responses_metadata,
+                responses_metadata,
                 Some(Arc::clone(&self.turn_state)),
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
@@ -1597,8 +1541,6 @@ impl ModelClientSession {
             return Ok(());
         }
 
-        let mut prewarm_metadata = responses_metadata.clone();
-        prewarm_metadata.request_kind = Some(CodexResponsesRequestKind::Prewarm);
         let disabled_trace = InferenceTraceContext::disabled();
         match self
             .stream_responses_websocket(
@@ -1608,7 +1550,7 @@ impl ModelClientSession {
                 effort,
                 summary,
                 service_tier,
-                &prewarm_metadata,
+                responses_metadata,
                 /*warmup*/ true,
                 current_span_w3c_trace_context(),
                 &disabled_trace,

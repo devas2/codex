@@ -222,8 +222,9 @@ pub(crate) async fn run_turn(
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
 
-        let responses_metadata = sess.services.model_client.responses_metadata(
-            &turn_context.turn_metadata_state,
+        let responses_metadata = turn_context.turn_metadata_state.current_responses_metadata(
+            sess.installation_id.clone(),
+            sess.services.model_client.current_window_id(),
             CodexResponsesRequestKind::Turn,
         );
         match run_sampling_request(

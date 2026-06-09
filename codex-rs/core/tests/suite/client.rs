@@ -90,6 +90,23 @@ use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
 const INSTALLATION_ID_FILENAME: &str = "installation_id";
+const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+fn test_turn_responses_metadata(
+    client: &ModelClient,
+    thread_id: ThreadId,
+) -> codex_core::CodexResponsesMetadata {
+    let thread_id = thread_id.to_string();
+    core_test_support::turn_responses_metadata(
+        TEST_INSTALLATION_ID,
+        &thread_id,
+        &thread_id,
+        /*turn_id*/ None,
+        client.current_window_id(),
+        &SessionSource::Exec,
+        /*parent_thread_id*/ None,
+    )
+}
 
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
@@ -939,7 +956,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         ))),
         thread_id.into(),
         thread_id,
-        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider,
         SessionSource::Exec,
         /*parent_thread_id*/ None,
@@ -949,7 +966,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     );
-    let responses_metadata = client.request_metadata(/*turn_id*/ None);
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Message {
@@ -2433,7 +2450,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*auth_manager*/ None,
         thread_id.into(),
         thread_id,
-        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         SessionSource::Exec,
         /*parent_thread_id*/ None,
@@ -2443,7 +2460,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     );
-    let responses_metadata = client.request_metadata(/*turn_id*/ None);
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();

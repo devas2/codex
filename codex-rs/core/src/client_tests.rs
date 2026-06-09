@@ -10,6 +10,7 @@ use super::X_OPENAI_SUBAGENT_HEADER;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
+use crate::responses_metadata::CodexResponsesMetadata;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
@@ -83,6 +84,32 @@ fn test_model_client_with_parent(
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
+    )
+}
+
+fn test_turn_responses_metadata(
+    client: &ModelClient,
+    turn_id: Option<&str>,
+) -> CodexResponsesMetadata {
+    CodexResponsesMetadata::for_turn_request(
+        client.state.installation_id.clone(),
+        client.state.session_id.to_string(),
+        client.state.thread_id.to_string(),
+        turn_id,
+        client.current_window_id(),
+        &client.state.session_source,
+        client.state.parent_thread_id,
+    )
+}
+
+fn test_websocket_connection_responses_metadata(client: &ModelClient) -> CodexResponsesMetadata {
+    CodexResponsesMetadata::for_websocket_connection(
+        client.state.installation_id.clone(),
+        client.state.session_id.to_string(),
+        client.state.thread_id.to_string(),
+        client.current_window_id(),
+        &client.state.session_source,
+        client.state.parent_thread_id,
     )
 }
 
@@ -293,7 +320,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
 
     client.advance_window_generation();
 
-    let responses_metadata = client.request_metadata(Some("turn-123"));
+    let responses_metadata = test_turn_responses_metadata(&client, Some("turn-123"));
     let client_metadata =
         client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
     let thread_id = client.state.thread_id;
@@ -566,7 +593,7 @@ fn model_client_with_counting_attestation(
 async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() {
     let (model_client, attestation_calls) =
         model_client_with_counting_attestation(/*include_attestation*/ true);
-    let responses_metadata = model_client.ws_connection_metadata();
+    let responses_metadata = test_websocket_connection_responses_metadata(&model_client);
 
     let headers = model_client
         .build_websocket_headers(&responses_metadata, /*turn_state*/ None)

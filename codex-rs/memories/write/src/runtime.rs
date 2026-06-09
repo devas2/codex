@@ -7,6 +7,7 @@ use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::content_items_to_text;
+use codex_core::detached_memory_responses_metadata;
 use codex_core::resolve_installation_id;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -169,13 +170,15 @@ impl MemoryStartupContext {
         let installation_id = resolve_installation_id(&config.codex_home).await?;
         let config_snapshot = self.thread.config_snapshot().await;
         let session_source = config_snapshot.session_source;
+        let session_id = SessionId::from(self.thread_id);
+        let session_id_string = session_id.to_string();
         let model_client = ModelClient::new(
             Some(Arc::clone(&self.auth_manager)),
-            SessionId::from(self.thread_id), // We use thread_id to detach this query from the foreground user session.
+            session_id, // We use thread_id to detach this query from the foreground user session.
             self.thread_id,
-            installation_id,
+            installation_id.clone(),
             config.model_provider.clone(),
-            session_source,
+            session_source.clone(),
             config_snapshot.parent_thread_id,
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
@@ -185,9 +188,16 @@ impl MemoryStartupContext {
         );
 
         let mut client_session = model_client.new_session();
-        let responses_metadata = model_client
-            .memory_request_metadata(&config.cwd, /*sandbox*/ None)
-            .await;
+        let responses_metadata = detached_memory_responses_metadata(
+            installation_id,
+            session_id_string,
+            self.thread_id.to_string(),
+            model_client.current_window_id(),
+            &session_source,
+            &config.cwd,
+            /*sandbox*/ None,
+        )
+        .await;
         let mut stream = client_session
             .stream(
                 prompt,

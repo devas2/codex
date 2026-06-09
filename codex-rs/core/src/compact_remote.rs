@@ -225,8 +225,9 @@ async fn run_remote_compact_task_inner_impl(
         output_schema: None,
         output_schema_strict: true,
     };
-    let responses_metadata = sess.services.model_client.responses_metadata(
-        &turn_context.turn_metadata_state,
+    let responses_metadata = turn_context.turn_metadata_state.current_responses_metadata(
+        sess.installation_id.clone(),
+        sess.services.model_client.current_window_id(),
         CodexResponsesRequestKind::Compaction(compaction_metadata),
     );
     let mut new_history = sess

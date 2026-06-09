@@ -128,7 +128,7 @@ pub(crate) struct TurnMetadataWorkspace {
     pub(crate) has_changes: Option<bool>,
 }
 
-/// Single source of truth for Codex metadata sent to ResponsesAPI.
+/// Caller-owned snapshot of Codex metadata sent to ResponsesAPI.
 ///
 /// The full Codex turn metadata blob is transported canonically as
 /// `client_metadata["x-codex-turn-metadata"]`. Flat `client_metadata` keys and direct HTTP/ws
@@ -154,6 +154,69 @@ pub struct CodexResponsesMetadata {
 }
 
 impl CodexResponsesMetadata {
+    /// Builds metadata for a websocket connection that is not yet associated with a model request.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_websocket_connection(
+        installation_id: String,
+        session_id: String,
+        thread_id: String,
+        window_id: String,
+        session_source: &SessionSource,
+        parent_thread_id: Option<ThreadId>,
+    ) -> Self {
+        Self {
+            parent_thread_id,
+            subagent_header: subagent_header_value(session_source),
+            ..Self::new(installation_id, session_id, thread_id, window_id)
+        }
+    }
+
+    /// Builds metadata for a normal Responses turn request without turn-state enrichment.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_turn_request(
+        installation_id: String,
+        session_id: String,
+        thread_id: String,
+        turn_id: Option<&str>,
+        window_id: String,
+        session_source: &SessionSource,
+        parent_thread_id: Option<ThreadId>,
+    ) -> Self {
+        Self::for_turn_scoped_request(
+            installation_id,
+            session_id,
+            thread_id,
+            turn_id,
+            window_id,
+            session_source,
+            parent_thread_id,
+            CodexResponsesRequestKind::Turn,
+        )
+    }
+
+    /// Builds metadata for a Responses websocket prewarm request without turn-state enrichment.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_prewarm_request(
+        installation_id: String,
+        session_id: String,
+        thread_id: String,
+        turn_id: Option<&str>,
+        window_id: String,
+        session_source: &SessionSource,
+        parent_thread_id: Option<ThreadId>,
+    ) -> Self {
+        Self::for_turn_scoped_request(
+            installation_id,
+            session_id,
+            thread_id,
+            turn_id,
+            window_id,
+            session_source,
+            parent_thread_id,
+            CodexResponsesRequestKind::Prewarm,
+        )
+    }
+
     pub(crate) fn new(
         installation_id: String,
         session_id: String,
@@ -176,6 +239,26 @@ impl CodexResponsesMetadata {
             workspaces: BTreeMap::new(),
             turn_started_at_unix_ms: None,
             extra: BTreeMap::new(),
+        }
+    }
+
+    fn for_turn_scoped_request(
+        installation_id: String,
+        session_id: String,
+        thread_id: String,
+        turn_id: Option<&str>,
+        window_id: String,
+        session_source: &SessionSource,
+        parent_thread_id: Option<ThreadId>,
+        request_kind: CodexResponsesRequestKind,
+    ) -> Self {
+        Self {
+            turn_id: turn_id.map(ToString::to_string),
+            request_kind: Some(request_kind),
+            parent_thread_id,
+            subagent_header: subagent_header_value(session_source),
+            subagent_kind: subagent_metadata_kind(session_source),
+            ..Self::new(installation_id, session_id, thread_id, window_id)
         }
     }
 

@@ -67,8 +67,12 @@ pub async fn build_turn_metadata_header(
     cwd: &AbsolutePathBuf,
     sandbox: Option<&str>,
 ) -> Option<String> {
-    build_memory_responses_metadata(
-        CodexResponsesMetadata::new(String::new(), String::new(), String::new(), String::new()),
+    detached_memory_responses_metadata(
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        &SessionSource::Unknown,
         cwd,
         sandbox,
     )
@@ -76,36 +80,23 @@ pub async fn build_turn_metadata_header(
     .turn_metadata_json()
 }
 
-pub(crate) async fn build_memory_responses_metadata(
-    mut metadata: CodexResponsesMetadata,
+#[allow(clippy::too_many_arguments)]
+pub async fn detached_memory_responses_metadata(
+    installation_id: String,
+    session_id: String,
+    thread_id: String,
+    window_id: String,
+    session_source: &SessionSource,
     cwd: &AbsolutePathBuf,
     sandbox: Option<&str>,
 ) -> CodexResponsesMetadata {
-    metadata.request_kind = Some(CodexResponsesRequestKind::Memory);
-    metadata.sandbox = sandbox.map(ToString::to_string);
-    metadata.workspaces = memory_workspaces(cwd).await;
-    metadata
-}
-
-async fn memory_workspaces(cwd: &AbsolutePathBuf) -> BTreeMap<String, TurnMetadataWorkspace> {
-    let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
-    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
-        get_head_commit_hash(cwd),
-        get_git_remote_urls_assume_git_repo(cwd),
-        get_has_changes(cwd),
-    );
-    let workspace_git_metadata = WorkspaceGitMetadata {
-        associated_remote_urls,
-        latest_git_commit_hash: head_commit_hash.map(|sha| sha.0),
-        has_changes,
-    };
-    let mut workspaces = BTreeMap::new();
-    if let Some(repo_root) = repo_root
-        && !workspace_git_metadata.is_empty()
-    {
-        workspaces.insert(repo_root, workspace_git_metadata.into());
+    CodexResponsesMetadata {
+        request_kind: Some(CodexResponsesRequestKind::Memory),
+        subagent_header: subagent_header_value(session_source),
+        sandbox: sandbox.map(ToString::to_string),
+        workspaces: memory_workspaces(cwd).await,
+        ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
     }
-    workspaces
 }
 
 #[derive(Clone, Debug)]
@@ -214,11 +205,12 @@ impl TurnMetadataState {
         window_id: String,
         request_kind: CodexResponsesRequestKind,
     ) -> CodexResponsesMetadata {
-        let mut metadata = self.current_metadata();
-        metadata.installation_id = installation_id;
-        metadata.window_id = window_id;
-        metadata.request_kind = Some(request_kind);
-        metadata
+        CodexResponsesMetadata {
+            installation_id,
+            window_id,
+            request_kind: Some(request_kind),
+            ..self.current_metadata()
+        }
     }
 
     pub(crate) fn mark_user_input_requested_during_turn(&self) {
@@ -349,6 +341,27 @@ impl TurnMetadataState {
             has_changes,
         }
     }
+}
+
+async fn memory_workspaces(cwd: &AbsolutePathBuf) -> BTreeMap<String, TurnMetadataWorkspace> {
+    let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
+    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+        get_head_commit_hash(cwd),
+        get_git_remote_urls_assume_git_repo(cwd),
+        get_has_changes(cwd),
+    );
+    let workspace_git_metadata = WorkspaceGitMetadata {
+        associated_remote_urls,
+        latest_git_commit_hash: head_commit_hash.map(|sha| sha.0),
+        has_changes,
+    };
+    let mut workspaces = BTreeMap::new();
+    if let Some(repo_root) = repo_root
+        && !workspace_git_metadata.is_empty()
+    {
+        workspaces.insert(repo_root, workspace_git_metadata.into());
+    }
+    workspaces
 }
 
 #[cfg(test)]

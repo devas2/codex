@@ -33,6 +33,23 @@ fn normalize_git_remote_url(url: &str) -> String {
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
+fn test_turn_responses_metadata(
+    client: &ModelClient,
+    thread_id: ThreadId,
+    session_source: &SessionSource,
+) -> codex_core::CodexResponsesMetadata {
+    let thread_id = thread_id.to_string();
+    core_test_support::turn_responses_metadata(
+        TEST_INSTALLATION_ID,
+        &thread_id,
+        &thread_id,
+        /*turn_id*/ None,
+        client.current_window_id(),
+        session_source,
+        /*parent_thread_id*/ None,
+    )
+}
+
 #[tokio::test]
 async fn responses_stream_includes_subagent_header_on_review() {
     core_test_support::skip_if_no_network!();
@@ -104,7 +121,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
-        session_source,
+        session_source.clone(),
         /*parent_thread_id*/ None,
         config.model_verbosity,
         /*enable_request_compression*/ false,
@@ -112,7 +129,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     );
-    let responses_metadata = client.request_metadata(/*turn_id*/ None);
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
@@ -238,7 +255,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
-        session_source,
+        session_source.clone(),
         /*parent_thread_id*/ None,
         config.model_verbosity,
         /*enable_request_compression*/ false,
@@ -246,7 +263,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     );
-    let responses_metadata = client.request_metadata(/*turn_id*/ None);
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
@@ -357,7 +374,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         thread_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
-        session_source,
+        session_source.clone(),
         /*parent_thread_id*/ None,
         config.model_verbosity,
         /*enable_request_compression*/ false,
@@ -365,7 +382,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     );
-    let responses_metadata = client.request_metadata(/*turn_id*/ None);
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
