@@ -519,17 +519,6 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
-        let window_generation = match &initial_history {
-            InitialHistory::Resumed(resumed_history) => u64::try_from(
-                resumed_history
-                    .history
-                    .iter()
-                    .filter(|item| matches!(item, RolloutItem::Compacted(_)))
-                    .count(),
-            )
-            .unwrap_or(u64::MAX),
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
-        };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -1051,9 +1040,6 @@ impl Session {
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
             };
-            services
-                .model_client
-                .set_window_generation(window_generation);
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
 
@@ -1222,6 +1208,21 @@ impl Session {
                     anyhow::bail!("required MCP servers failed to initialize: {details}");
                 }
             }
+            let precomputed_resumed_reconstruction =
+                if let InitialHistory::Resumed(resumed_history) = &initial_history {
+                    let turn_context = sess.new_default_turn().await;
+                    let reconstructed_rollout = sess
+                        .reconstruct_history_from_rollout(&turn_context, &resumed_history.history)
+                        .await;
+                    {
+                        let mut state = sess.state.lock().await;
+                        state.set_auto_compact_window_id(reconstructed_rollout.window_id);
+                    }
+                    Some((turn_context, reconstructed_rollout))
+                } else {
+                    None
+                };
+
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
             let session_start_source = match &initial_history {
@@ -1233,7 +1234,13 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            Box::pin(sess.record_initial_history(initial_history)).await;
+            Box::pin(
+                sess.record_initial_history_with_reconstruction(
+                    initial_history,
+                    precomputed_resumed_reconstruction,
+                ),
+            )
+            .await;
             {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);

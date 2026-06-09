@@ -291,13 +291,13 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
         Some(parent_thread_id),
     );
 
-    client.advance_window_generation();
-
+    let thread_id = client.state.thread_id;
+    let window_id = format!("{thread_id}:1");
     let client_metadata = client.build_ws_client_metadata(
+        &window_id,
         Some(r#"{"turn_id":"turn-123"}"#),
         /*use_responses_lite*/ false,
     );
-    let thread_id = client.state.thread_id;
     assert_eq!(
         client_metadata,
         std::collections::HashMap::from([
@@ -552,7 +552,11 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
         model_client_with_counting_attestation(/*include_attestation*/ true);
 
     let headers = model_client
-        .build_websocket_headers(/*turn_state*/ None, /*turn_metadata_header*/ None)
+        .build_websocket_headers(
+            /*turn_state*/ None,
+            "test-thread:0",
+            /*turn_metadata_header*/ None,
+        )
         .await;
 
     assert_eq!(

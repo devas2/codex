@@ -65,6 +65,7 @@ const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
 const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
     "ws_request_header_x_openai_internal_codex_responses_lite";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+const TEST_WINDOW_ID: &str = "test-thread:0";
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
 
@@ -274,7 +275,11 @@ async fn responses_websocket_preconnect_does_not_replace_turn_trace_payload() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
+        .preconnect_websocket(
+            TEST_WINDOW_ID,
+            &harness.session_telemetry,
+            &harness.model_info,
+        )
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -310,7 +315,11 @@ async fn responses_websocket_preconnect_reuses_connection() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
+        .preconnect_websocket(
+            TEST_WINDOW_ID,
+            &harness.session_telemetry,
+            &harness.model_info,
+        )
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -342,6 +351,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
         .prewarm_websocket(
+            TEST_WINDOW_ID,
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
@@ -396,6 +406,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
 
     client_session
         .prewarm_websocket(
+            TEST_WINDOW_ID,
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
@@ -441,6 +452,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
 
     let mut stream = client_session
         .stream(
+            TEST_WINDOW_ID,
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
@@ -606,12 +618,17 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
+        .preconnect_websocket(
+            TEST_WINDOW_ID,
+            &harness.session_telemetry,
+            &harness.model_info,
+        )
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let mut stream = client_session
         .stream(
+            TEST_WINDOW_ID,
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
@@ -651,6 +668,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
         .prewarm_websocket(
+            TEST_WINDOW_ID,
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
@@ -663,6 +681,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
         .expect("websocket prewarm failed");
     let mut stream = client_session
         .stream(
+            TEST_WINDOW_ID,
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
@@ -717,6 +736,7 @@ async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets()
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
         .prewarm_websocket(
+            TEST_WINDOW_ID,
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
@@ -772,7 +792,11 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
+        .preconnect_websocket(
+            TEST_WINDOW_ID,
+            &harness.session_telemetry,
+            &harness.model_info,
+        )
         .await
         .expect("websocket preconnect failed");
 
@@ -1066,6 +1090,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
 
     let mut stream = client_session
         .stream(
+            TEST_WINDOW_ID,
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
@@ -1140,6 +1165,7 @@ async fn responses_websocket_emits_rate_limit_events() {
 
     let mut stream = client_session
         .stream(
+            TEST_WINDOW_ID,
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
@@ -1794,6 +1820,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
 
     let mut second_stream = session
         .stream(
+            TEST_WINDOW_ID,
             &prompt_two,
             &harness.model_info,
             &harness.session_telemetry,
@@ -1882,6 +1909,7 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
 
     let mut second_stream = session
         .stream(
+            TEST_WINDOW_ID,
             &prompt_two,
             &harness.model_info,
             &harness.session_telemetry,
@@ -2116,6 +2144,7 @@ async fn stream_until_complete_with_model_info(
 ) {
     let mut stream = client_session
         .stream(
+            TEST_WINDOW_ID,
             prompt,
             model_info,
             &harness.session_telemetry,
@@ -2183,6 +2212,7 @@ async fn stream_until_complete_with_request_metadata(
 ) {
     let mut stream = client_session
         .stream(
+            TEST_WINDOW_ID,
             prompt,
             &harness.model_info,
             &harness.session_telemetry,
