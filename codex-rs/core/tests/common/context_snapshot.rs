@@ -455,9 +455,14 @@ fn normalize_snapshot_dynamic_values(text: &str) -> String {
         Regex::new(r#""turn_started_at_unix_ms":\d+"#)
             .expect("turn_started_at_unix_ms regex should compile")
     });
+    static SANDBOX_RE: OnceLock<Regex> = OnceLock::new();
+    let sandbox_re = SANDBOX_RE
+        .get_or_init(|| Regex::new(r#""sandbox":"[^"]+""#).expect("sandbox regex should compile"));
     let text = uuid_re.replace_all(text, "<UUID>");
-    turn_started_at_unix_ms_re
-        .replace_all(&text, r#""turn_started_at_unix_ms":<UNIX_MS>"#)
+    let text =
+        turn_started_at_unix_ms_re.replace_all(&text, r#""turn_started_at_unix_ms":<UNIX_MS>"#);
+    sandbox_re
+        .replace_all(&text, r#""sandbox":"<SANDBOX>""#)
         .into_owned()
 }
 
@@ -721,15 +726,15 @@ mod tests {
     }
 
     #[test]
-    fn redacted_text_mode_normalizes_turn_metadata_timestamp_json_strings() {
+    fn redacted_text_mode_normalizes_turn_metadata_dynamic_json_strings() {
         let rendered = format_snapshot_json_string(
-            r#"{"turn_id":"019eaded-ba5c-7d40-8a81-a4dcebc4679e","turn_started_at_unix_ms":1781035793002}"#,
+            r#"{"turn_id":"019eaded-ba5c-7d40-8a81-a4dcebc4679e","sandbox":"seccomp","turn_started_at_unix_ms":1781035793002}"#,
             &ContextSnapshotOptions::default(),
         );
 
         assert_eq!(
             rendered,
-            r#"{"turn_id":"<UUID>","turn_started_at_unix_ms":<UNIX_MS>}"#
+            r#"{"turn_id":"<UUID>","sandbox":"<SANDBOX>","turn_started_at_unix_ms":<UNIX_MS>}"#
         );
     }
 }
