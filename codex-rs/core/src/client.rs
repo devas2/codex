@@ -80,12 +80,12 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::create_tools_json_for_responses_api;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -112,6 +112,12 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::feedback_tags;
+use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::subagent_header_value;
+use crate::responses_metadata::subagent_metadata_kind;
+use crate::turn_metadata::TurnMetadataState;
+use crate::turn_metadata::build_memory_responses_metadata;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
@@ -457,6 +463,7 @@ impl ModelClient {
     ///
     /// The model selection and telemetry context are passed explicitly to keep `ModelClient`
     /// session-scoped.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn compact_conversation_history(
         &self,
         prompt: &Prompt,
@@ -464,7 +471,7 @@ impl ModelClient {
         settings: CompactConversationRequestSettings,
         session_telemetry: &SessionTelemetry,
         compaction_trace: &CompactionTraceContext,
-        turn_metadata_header: Option<&str>,
+        responses_metadata: &CodexResponsesMetadata,
     ) -> Result<Vec<ResponseItem>> {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
@@ -488,6 +495,7 @@ impl ModelClient {
             settings.effort,
             settings.summary,
             settings.service_tier,
+            responses_metadata,
         )?;
         let ResponsesApiRequest {
             model,
@@ -514,18 +522,17 @@ impl ModelClient {
         };
 
         let mut extra_headers = ApiHeaderMap::new();
-        if let Ok(header_value) = HeaderValue::from_str(&self.state.installation_id) {
+        if let Ok(header_value) = HeaderValue::from_str(&responses_metadata.installation_id) {
             extra_headers.insert(X_CODEX_INSTALLATION_ID_HEADER, header_value);
         }
         extra_headers.extend(build_responses_headers(
             self.state.beta_features_header.as_deref(),
             /*turn_state*/ None,
-            parse_turn_metadata_header(turn_metadata_header).as_ref(),
         ));
-        extra_headers.extend(self.build_responses_identity_headers());
+        extra_headers.extend(self.build_responses_compatibility_headers(responses_metadata));
         extra_headers.extend(build_session_headers(
-            Some(self.state.session_id.to_string()),
-            Some(self.state.thread_id.to_string()),
+            Some(responses_metadata.session_id.to_string()),
+            Some(responses_metadata.thread_id.to_string()),
         ));
         if let Some(header_value) = self.generate_attestation_header_for().await {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
@@ -644,50 +651,80 @@ impl ModelClient {
         extra_headers
     }
 
-    fn build_responses_identity_headers(&self) -> ApiHeaderMap {
-        let mut extra_headers = self.build_subagent_headers();
-        if let Some(parent_thread_id) = parent_thread_id_header_value(self.state.parent_thread_id)
-            && let Ok(val) = HeaderValue::from_str(&parent_thread_id)
-        {
-            extra_headers.insert(X_CODEX_PARENT_THREAD_ID_HEADER, val);
+    pub fn request_metadata(&self, turn_id: Option<&str>) -> CodexResponsesMetadata {
+        CodexResponsesMetadata {
+            turn_id: turn_id.map(ToString::to_string),
+            request_kind: Some(CodexResponsesRequestKind::Turn),
+            parent_thread_id: self.state.parent_thread_id,
+            subagent_header: subagent_header_value(&self.state.session_source),
+            subagent_kind: subagent_metadata_kind(&self.state.session_source),
+            ..self.base_responses_metadata()
         }
-        if let Ok(val) = HeaderValue::from_str(&self.current_window_id()) {
-            extra_headers.insert(X_CODEX_WINDOW_ID_HEADER, val);
+    }
+
+    pub async fn memory_request_metadata(
+        &self,
+        cwd: &AbsolutePathBuf,
+        sandbox: Option<&str>,
+    ) -> CodexResponsesMetadata {
+        let mut metadata =
+            build_memory_responses_metadata(self.base_responses_metadata(), cwd, sandbox).await;
+        metadata.subagent_header = subagent_header_value(&self.state.session_source);
+        metadata
+    }
+
+    pub(crate) fn ws_connection_metadata(&self) -> CodexResponsesMetadata {
+        CodexResponsesMetadata {
+            parent_thread_id: self.state.parent_thread_id,
+            subagent_header: subagent_header_value(&self.state.session_source),
+            ..self.base_responses_metadata()
+        }
+    }
+
+    fn base_responses_metadata(&self) -> CodexResponsesMetadata {
+        CodexResponsesMetadata::new(
+            self.state.installation_id.clone(),
+            self.state.session_id.to_string(),
+            self.state.thread_id.to_string(),
+            self.current_window_id(),
+        )
+    }
+
+    pub(crate) fn responses_metadata(
+        &self,
+        turn_metadata_state: &TurnMetadataState,
+        request_kind: CodexResponsesRequestKind,
+    ) -> CodexResponsesMetadata {
+        turn_metadata_state.current_responses_metadata(
+            self.state.installation_id.clone(),
+            self.current_window_id(),
+            request_kind,
+        )
+    }
+
+    fn build_responses_compatibility_headers(
+        &self,
+        responses_metadata: &CodexResponsesMetadata,
+    ) -> ApiHeaderMap {
+        let mut extra_headers = responses_metadata.compatibility_headers();
+        if matches!(
+            self.state.session_source,
+            SessionSource::Internal(InternalSessionSource::MemoryConsolidation)
+        ) {
+            extra_headers.insert(
+                X_OPENAI_MEMGEN_REQUEST_HEADER,
+                HeaderValue::from_static("true"),
+            );
         }
         extra_headers
     }
 
     fn build_ws_client_metadata(
         &self,
-        turn_metadata_header: Option<&str>,
+        responses_metadata: &CodexResponsesMetadata,
         use_responses_lite: bool,
     ) -> HashMap<String, String> {
-        let mut client_metadata = HashMap::new();
-        client_metadata.insert(
-            X_CODEX_INSTALLATION_ID_HEADER.to_string(),
-            self.state.installation_id.clone(),
-        );
-        client_metadata.insert(
-            X_CODEX_WINDOW_ID_HEADER.to_string(),
-            self.current_window_id(),
-        );
-        if let Some(subagent) = subagent_header_value(&self.state.session_source) {
-            client_metadata.insert(X_OPENAI_SUBAGENT_HEADER.to_string(), subagent);
-        }
-        if let Some(parent_thread_id) = parent_thread_id_header_value(self.state.parent_thread_id) {
-            client_metadata.insert(
-                X_CODEX_PARENT_THREAD_ID_HEADER.to_string(),
-                parent_thread_id,
-            );
-        }
-        if let Some(turn_metadata_header) = parse_turn_metadata_header(turn_metadata_header)
-            && let Ok(turn_metadata) = turn_metadata_header.to_str()
-        {
-            client_metadata.insert(
-                X_CODEX_TURN_METADATA_HEADER.to_string(),
-                turn_metadata.to_string(),
-            );
-        }
+        let mut client_metadata = responses_metadata.client_metadata();
         if use_responses_lite {
             client_metadata.insert(
                 WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_string(),
@@ -752,6 +789,7 @@ impl ModelClient {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_responses_request(
         &self,
         provider: &codex_api::Provider,
@@ -760,6 +798,7 @@ impl ModelClient {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
+        responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
@@ -802,16 +841,7 @@ impl ModelClient {
             service_tier,
             prompt_cache_key,
             text,
-            client_metadata: Some(HashMap::from([
-                (
-                    X_CODEX_INSTALLATION_ID_HEADER.to_string(),
-                    self.state.installation_id.clone(),
-                ),
-                (
-                    X_CODEX_WINDOW_ID_HEADER.to_string(),
-                    self.current_window_id(),
-                ),
-            ])),
+            client_metadata: Some(responses_metadata.client_metadata()),
         };
         Ok(request)
     }
@@ -854,13 +884,13 @@ impl ModelClient {
         session_telemetry: &SessionTelemetry,
         api_provider: codex_api::Provider,
         api_auth: SharedAuthProvider,
+        responses_metadata: &CodexResponsesMetadata,
         turn_state: Option<Arc<OnceLock<String>>>,
-        turn_metadata_header: Option<&str>,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
         let headers = self
-            .build_websocket_headers(turn_state.as_ref(), turn_metadata_header)
+            .build_websocket_headers(responses_metadata, turn_state.as_ref())
             .await;
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
             session_telemetry,
@@ -940,22 +970,19 @@ impl ModelClient {
     /// replayed on reconnect within the same turn.
     async fn build_websocket_headers(
         &self,
+        responses_metadata: &CodexResponsesMetadata,
         turn_state: Option<&Arc<OnceLock<String>>>,
-        turn_metadata_header: Option<&str>,
     ) -> ApiHeaderMap {
-        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
-        let session_id = self.state.session_id.to_string();
-        let thread_id = self.state.thread_id.to_string();
-        let mut headers = build_responses_headers(
-            self.state.beta_features_header.as_deref(),
-            turn_state,
-            turn_metadata_header.as_ref(),
-        );
-        if let Ok(header_value) = HeaderValue::from_str(&thread_id) {
+        let mut headers =
+            build_responses_headers(self.state.beta_features_header.as_deref(), turn_state);
+        if let Ok(header_value) = HeaderValue::from_str(&responses_metadata.thread_id) {
             headers.insert("x-client-request-id", header_value);
         }
-        headers.extend(build_session_headers(Some(session_id), Some(thread_id)));
-        headers.extend(self.build_responses_identity_headers());
+        headers.extend(build_session_headers(
+            Some(responses_metadata.session_id.to_string()),
+            Some(responses_metadata.thread_id.to_string()),
+        ));
+        headers.extend(self.build_responses_compatibility_headers(responses_metadata));
         if let Some(header_value) = self.generate_attestation_header_for().await {
             headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
@@ -998,24 +1025,23 @@ impl ModelClientSession {
     /// regardless of transport choice.
     async fn build_responses_options(
         &self,
-        turn_metadata_header: Option<&str>,
+        responses_metadata: &CodexResponsesMetadata,
         compression: Compression,
         use_responses_lite: bool,
     ) -> ApiResponsesOptions {
-        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
-        let session_id = self.client.state.session_id.to_string();
-        let thread_id = self.client.state.thread_id.to_string();
         ApiResponsesOptions {
-            session_id: Some(session_id),
-            thread_id: Some(thread_id),
+            session_id: Some(responses_metadata.session_id.to_string()),
+            thread_id: Some(responses_metadata.thread_id.to_string()),
             session_source: Some(self.client.state.session_source.clone()),
             extra_headers: {
                 let mut headers = build_responses_headers(
                     self.client.state.beta_features_header.as_deref(),
                     Some(&self.turn_state),
-                    turn_metadata_header.as_ref(),
                 );
-                headers.extend(self.client.build_responses_identity_headers());
+                headers.extend(
+                    self.client
+                        .build_responses_compatibility_headers(responses_metadata),
+                );
                 if let Some(header_value) = self.client.generate_attestation_header_for().await {
                     headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
                 }
@@ -1041,12 +1067,12 @@ impl ModelClientSession {
         let previous_request = self.websocket_session.last_request.as_ref()?;
         let mut previous_without_input = previous_request.clone();
         previous_without_input.input.clear();
+        previous_without_input.client_metadata = None;
         let mut request_without_input = request.clone();
         request_without_input.input.clear();
+        request_without_input.client_metadata = None;
         if previous_without_input != request_without_input {
-            trace!(
-                "incremental request failed, properties didn't match {previous_without_input:?} != {request_without_input:?}"
-            );
+            trace!("incremental request failed, websocket reuse properties didn't match");
             return None;
         }
 
@@ -1134,14 +1160,15 @@ impl ModelClientSession {
             client_setup.api_auth.as_ref(),
             PendingUnauthorizedRetry::default(),
         );
+        let responses_metadata = self.client.ws_connection_metadata();
         let connection = self
             .client
             .connect_websocket(
                 session_telemetry,
                 client_setup.api_provider,
                 client_setup.api_auth,
+                &responses_metadata,
                 Some(Arc::clone(&self.turn_state)),
-                /*turn_metadata_header*/ None,
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
@@ -1161,7 +1188,7 @@ impl ModelClientSession {
             wire_api = %self.client.state.provider.info().wire_api,
             transport = "responses_websocket",
             api.path = "responses",
-            turn.has_metadata_header = params.turn_metadata_header.is_some()
+            turn.has_metadata_header = params.responses_metadata.has_turn_metadata()
         )
     )]
     async fn websocket_connection(
@@ -1172,7 +1199,7 @@ impl ModelClientSession {
             session_telemetry,
             api_provider,
             api_auth,
-            turn_metadata_header,
+            responses_metadata,
             options,
             auth_context,
             request_route_telemetry,
@@ -1196,8 +1223,8 @@ impl ModelClientSession {
                     session_telemetry,
                     api_provider,
                     api_auth,
+                    responses_metadata,
                     Some(turn_state),
-                    turn_metadata_header,
                     auth_context,
                     request_route_telemetry,
                 )
@@ -1252,7 +1279,7 @@ impl ModelClientSession {
             transport = "responses_http",
             http.method = "POST",
             api.path = "responses",
-            turn.has_metadata_header = turn_metadata_header.is_some()
+            turn.has_metadata_header = responses_metadata.has_turn_metadata()
         )
     )]
     async fn stream_responses_api(
@@ -1263,7 +1290,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
-        turn_metadata_header: Option<&str>,
+        responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
@@ -1288,7 +1315,7 @@ impl ModelClientSession {
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
             let mut options = self
                 .build_responses_options(
-                    turn_metadata_header,
+                    responses_metadata,
                     compression,
                     model_info.use_responses_lite,
                 )
@@ -1301,6 +1328,7 @@ impl ModelClientSession {
                 effort.clone(),
                 summary,
                 service_tier.clone(),
+                responses_metadata,
             )?;
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
@@ -1368,7 +1396,7 @@ impl ModelClientSession {
             wire_api = %self.client.state.provider.info().wire_api,
             transport = "responses_websocket",
             api.path = "responses",
-            turn.has_metadata_header = turn_metadata_header.is_some(),
+            turn.has_metadata_header = responses_metadata.has_turn_metadata(),
             websocket.warmup = warmup
         )
     )]
@@ -1380,7 +1408,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
-        turn_metadata_header: Option<&str>,
+        responses_metadata: &CodexResponsesMetadata,
         warmup: bool,
         request_trace: Option<W3cTraceContext>,
         inference_trace: &InferenceTraceContext,
@@ -1402,7 +1430,7 @@ impl ModelClientSession {
 
             let options = self
                 .build_responses_options(
-                    turn_metadata_header,
+                    responses_metadata,
                     compression,
                     model_info.use_responses_lite,
                 )
@@ -1414,11 +1442,12 @@ impl ModelClientSession {
                 effort.clone(),
                 summary,
                 service_tier.clone(),
+                responses_metadata,
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
                     Some(self.client.build_ws_client_metadata(
-                        turn_metadata_header,
+                        responses_metadata,
                         model_info.use_responses_lite,
                     )),
                     request_trace.as_ref(),
@@ -1434,7 +1463,7 @@ impl ModelClientSession {
                     session_telemetry,
                     api_provider: client_setup.api_provider,
                     api_auth: client_setup.api_auth,
-                    turn_metadata_header,
+                    responses_metadata,
                     options: &options,
                     auth_context: request_auth_context,
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint(
@@ -1559,7 +1588,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
-        turn_metadata_header: Option<&str>,
+        responses_metadata: &CodexResponsesMetadata,
     ) -> Result<()> {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
@@ -1568,6 +1597,8 @@ impl ModelClientSession {
             return Ok(());
         }
 
+        let mut prewarm_metadata = responses_metadata.clone();
+        prewarm_metadata.request_kind = Some(CodexResponsesRequestKind::Prewarm);
         let disabled_trace = InferenceTraceContext::disabled();
         match self
             .stream_responses_websocket(
@@ -1577,7 +1608,7 @@ impl ModelClientSession {
                 effort,
                 summary,
                 service_tier,
-                turn_metadata_header,
+                &prewarm_metadata,
                 /*warmup*/ true,
                 current_span_w3c_trace_context(),
                 &disabled_trace,
@@ -1620,7 +1651,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
-        turn_metadata_header: Option<&str>,
+        responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
@@ -1636,7 +1667,7 @@ impl ModelClientSession {
                             effort.clone(),
                             summary,
                             service_tier.clone(),
-                            turn_metadata_header,
+                            responses_metadata,
                             /*warmup*/ false,
                             request_trace,
                             inference_trace,
@@ -1657,7 +1688,7 @@ impl ModelClientSession {
                     effort,
                     summary,
                     service_tier,
-                    turn_metadata_header,
+                    responses_metadata,
                     inference_trace,
                 )
                 .await
@@ -1684,14 +1715,6 @@ impl ModelClientSession {
     }
 }
 
-/// Parses per-turn metadata into an HTTP header value.
-///
-/// Invalid values are treated as absent so callers can compare and propagate
-/// metadata with the same sanitization path used when constructing headers.
-fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
-    turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
-}
-
 /// Stamp a ResponsesWsRequest with the current time.
 ///
 /// Meant to be called just before sending the request over the socket, to capture realistic
@@ -1713,11 +1736,9 @@ fn stamp_ws_stream_request_start_ms(request: &mut ResponsesWsRequest) {
 ///
 /// - `x-codex-beta-features`: comma-separated beta feature keys enabled for the session.
 /// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
-/// - `x-codex-turn-metadata`: optional per-turn metadata for observability.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
     turn_state: Option<&Arc<OnceLock<String>>>,
-    turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
     if let Some(value) = beta_features_header
@@ -1732,9 +1753,6 @@ fn build_responses_headers(
     {
         headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
     }
-    if let Some(header_value) = turn_metadata_header {
-        headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
-    }
     headers
 }
 
@@ -1745,31 +1763,6 @@ fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: boo
             HeaderValue::from_static("true"),
         );
     }
-}
-
-fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(subagent_source) => match subagent_source {
-            SubAgentSource::Review => Some("review".to_string()),
-            SubAgentSource::Compact => Some("compact".to_string()),
-            SubAgentSource::MemoryConsolidation => Some("memory_consolidation".to_string()),
-            SubAgentSource::ThreadSpawn { .. } => Some("collab_spawn".to_string()),
-            SubAgentSource::Other(label) => Some(label.clone()),
-        },
-        SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => {
-            Some("memory_consolidation".to_string())
-        }
-        SessionSource::Cli
-        | SessionSource::VSCode
-        | SessionSource::Exec
-        | SessionSource::Mcp
-        | SessionSource::Custom(_)
-        | SessionSource::Unknown => None,
-    }
-}
-
-fn parent_thread_id_header_value(parent_thread_id: Option<ThreadId>) -> Option<String> {
-    parent_thread_id.map(|parent_thread_id| parent_thread_id.to_string())
 }
 
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
@@ -2008,7 +2001,7 @@ struct WebsocketConnectParams<'a> {
     session_telemetry: &'a SessionTelemetry,
     api_provider: codex_api::Provider,
     api_auth: SharedAuthProvider,
-    turn_metadata_header: Option<&'a str>,
+    responses_metadata: &'a CodexResponsesMetadata,
     options: &'a ApiResponsesOptions,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,

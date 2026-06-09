@@ -46,7 +46,6 @@ pub(crate) struct StageOneRequestContext {
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
     pub(crate) reasoning_summary: ReasoningSummary,
     pub(crate) service_tier: Option<String>,
-    pub(crate) turn_metadata_header: Option<String>,
 }
 
 impl StageOneRequestContext {
@@ -145,8 +144,6 @@ impl MemoryStartupContext {
             .get_models_manager()
             .get_model_info(model_name, &config.to_models_manager_config())
             .await;
-        let turn_metadata_header =
-            codex_core::build_turn_metadata_header(&config.cwd, /*sandbox*/ None).await;
         let reasoning_summary = config
             .model_reasoning_summary
             .unwrap_or(model_info.default_reasoning_summary);
@@ -160,7 +157,6 @@ impl MemoryStartupContext {
             reasoning_effort: Some(reasoning_effort),
             reasoning_summary,
             service_tier: config_snapshot.service_tier,
-            turn_metadata_header,
         }
     }
 
@@ -189,6 +185,9 @@ impl MemoryStartupContext {
         );
 
         let mut client_session = model_client.new_session();
+        let responses_metadata = model_client
+            .memory_request_metadata(&config.cwd, /*sandbox*/ None)
+            .await;
         let mut stream = client_session
             .stream(
                 prompt,
@@ -197,7 +196,7 @@ impl MemoryStartupContext {
                 context.reasoning_effort.clone(),
                 context.reasoning_summary,
                 context.service_tier.clone(),
-                context.turn_metadata_header.as_deref(),
+                &responses_metadata,
                 &InferenceTraceContext::disabled(),
             )
             .await?;

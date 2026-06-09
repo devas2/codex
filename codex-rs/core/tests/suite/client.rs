@@ -113,6 +113,41 @@ fn message_input_text_contains(request: &ResponsesRequest, role: &str, needle: &
         .any(|text| text.contains(needle))
 }
 
+fn assert_codex_client_metadata(
+    request_body: &serde_json::Value,
+    installation_id: &str,
+    session_id: &str,
+    thread_id: &str,
+) {
+    let client_metadata = &request_body["client_metadata"];
+    assert_eq!(
+        client_metadata["x-codex-installation-id"].as_str(),
+        Some(installation_id)
+    );
+    assert_eq!(client_metadata["session_id"].as_str(), Some(session_id));
+    assert_eq!(client_metadata["thread_id"].as_str(), Some(thread_id));
+    let Some(turn_metadata_str) = client_metadata["x-codex-turn-metadata"].as_str() else {
+        panic!("missing x-codex-turn-metadata client metadata");
+    };
+    let Ok(turn_metadata) = serde_json::from_str::<serde_json::Value>(turn_metadata_str) else {
+        panic!("invalid x-codex-turn-metadata json");
+    };
+    assert_eq!(
+        turn_metadata["installation_id"].as_str(),
+        Some(installation_id)
+    );
+    assert_eq!(turn_metadata["session_id"].as_str(), Some(session_id));
+    assert_eq!(turn_metadata["thread_id"].as_str(), Some(thread_id));
+    assert_eq!(
+        client_metadata["turn_id"].as_str(),
+        turn_metadata["turn_id"].as_str()
+    );
+    assert_eq!(
+        client_metadata["x-codex-window-id"].as_str(),
+        turn_metadata["window_id"].as_str()
+    );
+}
+
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
 /// Returns the fake JWT string written to `tokens.id_token`.
 #[expect(clippy::unwrap_used)]
@@ -781,9 +816,10 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     let installation_id =
         std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
             .expect("read installation id");
+    let session_id_string = expected_session_id.to_string();
     let thread_id_string = expected_thread_id.to_string();
 
-    assert_eq!(request_session_id, expected_session_id.to_string());
+    assert_eq!(request_session_id, session_id_string.as_str());
     assert_eq!(request_thread_id, thread_id_string.as_str());
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
@@ -791,9 +827,11 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
         request_body["prompt_cache_key"].as_str(),
         Some(thread_id_string.as_str())
     );
-    assert_eq!(
-        request_body["client_metadata"]["x-codex-installation-id"].as_str(),
-        Some(installation_id.as_str())
+    assert_codex_client_metadata(
+        &request_body,
+        installation_id.as_str(),
+        session_id_string.as_str(),
+        thread_id_string.as_str(),
     );
 }
 
@@ -911,6 +949,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     );
+    let responses_metadata = client.request_metadata(/*turn_id*/ None);
     let mut client_session = client.new_session();
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Message {
@@ -930,7 +969,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
             /*service_tier*/ None,
-            /*turn_metadata_header*/ None,
+            &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
@@ -1054,15 +1093,19 @@ async fn chatgpt_auth_sends_correct_request() {
     let installation_id =
         std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
             .expect("read installation id");
-    assert_eq!(request_session_id, expected_session_id.to_string());
-    assert_eq!(request_thread_id, expected_thread_id.to_string());
+    let session_id_string = expected_session_id.to_string();
+    let thread_id_string = expected_thread_id.to_string();
+    assert_eq!(request_session_id, session_id_string.as_str());
+    assert_eq!(request_thread_id, thread_id_string.as_str());
 
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
     assert_eq!(request_chatgpt_account_id, "account_id");
-    assert_eq!(
-        request_body["client_metadata"]["x-codex-installation-id"].as_str(),
-        Some(installation_id.as_str())
+    assert_codex_client_metadata(
+        &request_body,
+        installation_id.as_str(),
+        session_id_string.as_str(),
+        thread_id_string.as_str(),
     );
     assert!(request_body["stream"].as_bool().unwrap());
     assert_eq!(
@@ -2400,6 +2443,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
     );
+    let responses_metadata = client.request_metadata(/*turn_id*/ None);
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
@@ -2473,7 +2517,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
             /*service_tier*/ None,
-            /*turn_metadata_header*/ None,
+            &responses_metadata,
             &codex_rollout_trace::InferenceTraceContext::disabled(),
         )
         .await
