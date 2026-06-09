@@ -252,7 +252,7 @@ impl TurnMetadataState {
             parent_thread_id: self.parent_thread_id,
             subagent_header: self.subagent_header.clone(),
             subagent_kind: self.subagent_kind.clone(),
-            thread_source: self.thread_source,
+            thread_source: self.thread_source.clone(),
             sandbox: self.sandbox.clone(),
             workspaces: self.current_workspaces(),
             turn_started_at_unix_ms: self.current_turn_started_at_unix_ms(),
