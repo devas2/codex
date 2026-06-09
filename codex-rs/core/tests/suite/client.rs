@@ -50,6 +50,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
+use core_test_support::TestCodexResponsesRequestKind;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ResponsesRequest;
@@ -64,6 +65,7 @@ use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
+use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
@@ -97,7 +99,7 @@ fn test_turn_responses_metadata(
     thread_id: ThreadId,
 ) -> codex_core::CodexResponsesMetadata {
     let thread_id = thread_id.to_string();
-    core_test_support::turn_responses_metadata(
+    test_responses_metadata(
         TEST_INSTALLATION_ID,
         &thread_id,
         &thread_id,
@@ -105,6 +107,7 @@ fn test_turn_responses_metadata(
         client.current_window_id(),
         &SessionSource::Exec,
         /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
     )
 }
 

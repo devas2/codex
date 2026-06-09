@@ -15,8 +15,10 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use core_test_support::TestCodexResponsesRequestKind;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
+use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::test_codex::test_codex;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -39,7 +41,7 @@ fn test_turn_responses_metadata(
     session_source: &SessionSource,
 ) -> codex_core::CodexResponsesMetadata {
     let thread_id = thread_id.to_string();
-    core_test_support::turn_responses_metadata(
+    test_responses_metadata(
         TEST_INSTALLATION_ID,
         &thread_id,
         &thread_id,
@@ -47,6 +49,7 @@ fn test_turn_responses_metadata(
         client.current_window_id(),
         session_source,
         /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
     )
 }
 

@@ -36,8 +36,8 @@ use codex_rollout_trace::InferenceTraceContext;
 use codex_rollout_trace::RawTraceEventPayload;
 use codex_rollout_trace::TraceWriter;
 use codex_rollout_trace::replay_bundle;
+use core_test_support::TestCodexResponsesRequestKind;
 use core_test_support::load_default_config_for_test;
-use core_test_support::prewarm_responses_metadata;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::ev_assistant_message;
@@ -45,12 +45,11 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
+use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::tracing::install_test_tracing;
-use core_test_support::turn_responses_metadata;
 use core_test_support::wait_for_event;
-use core_test_support::websocket_connection_responses_metadata;
 use futures::StreamExt;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
@@ -109,11 +108,12 @@ struct WebsocketTestHarness {
     session_telemetry: SessionTelemetry,
 }
 
-fn turn_metadata(
+fn responses_metadata(
     harness: &WebsocketTestHarness,
     turn_id: Option<&str>,
+    request_kind: TestCodexResponsesRequestKind,
 ) -> CodexResponsesMetadata {
-    turn_responses_metadata(
+    test_responses_metadata(
         TEST_INSTALLATION_ID,
         &harness.session_id.to_string(),
         &harness.thread_id.to_string(),
@@ -121,32 +121,26 @@ fn turn_metadata(
         harness.client.current_window_id(),
         &SessionSource::Exec,
         /*parent_thread_id*/ None,
+        request_kind,
     )
+}
+
+fn turn_metadata(harness: &WebsocketTestHarness, turn_id: Option<&str>) -> CodexResponsesMetadata {
+    responses_metadata(harness, turn_id, TestCodexResponsesRequestKind::Turn)
 }
 
 fn prewarm_metadata(
     harness: &WebsocketTestHarness,
     turn_id: Option<&str>,
 ) -> CodexResponsesMetadata {
-    prewarm_responses_metadata(
-        TEST_INSTALLATION_ID,
-        &harness.session_id.to_string(),
-        &harness.thread_id.to_string(),
-        turn_id,
-        harness.client.current_window_id(),
-        &SessionSource::Exec,
-        /*parent_thread_id*/ None,
-    )
+    responses_metadata(harness, turn_id, TestCodexResponsesRequestKind::Prewarm)
 }
 
 fn websocket_connection_metadata(harness: &WebsocketTestHarness) -> CodexResponsesMetadata {
-    websocket_connection_responses_metadata(
-        TEST_INSTALLATION_ID,
-        &harness.session_id.to_string(),
-        &harness.thread_id.to_string(),
-        harness.client.current_window_id(),
-        &SessionSource::Exec,
-        /*parent_thread_id*/ None,
+    responses_metadata(
+        harness,
+        /*turn_id*/ None,
+        TestCodexResponsesRequestKind::WebsocketConnection,
     )
 }
 

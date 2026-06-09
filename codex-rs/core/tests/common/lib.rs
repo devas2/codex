@@ -12,12 +12,11 @@ use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::CodexThread;
-use codex_core::CodexResponsesMetadata;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::SessionSource;
+pub use codex_core::test_support::TestCodexResponsesRequestKind;
+pub use codex_core::test_support::responses_metadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;
 pub use codex_utils_absolute_path::test_support::PathExt;
@@ -144,64 +143,6 @@ pub fn test_tmp_path() -> AbsolutePathBuf {
 
 pub fn test_tmp_path_buf() -> PathBuf {
     test_tmp_path().into_path_buf()
-}
-
-pub fn turn_responses_metadata(
-    installation_id: &str,
-    session_id: &str,
-    thread_id: &str,
-    turn_id: Option<&str>,
-    window_id: String,
-    session_source: &SessionSource,
-    parent_thread_id: Option<ThreadId>,
-) -> CodexResponsesMetadata {
-    CodexResponsesMetadata::for_turn_request(
-        installation_id.to_string(),
-        session_id.to_string(),
-        thread_id.to_string(),
-        turn_id,
-        window_id,
-        session_source,
-        parent_thread_id,
-    )
-}
-
-pub fn prewarm_responses_metadata(
-    installation_id: &str,
-    session_id: &str,
-    thread_id: &str,
-    turn_id: Option<&str>,
-    window_id: String,
-    session_source: &SessionSource,
-    parent_thread_id: Option<ThreadId>,
-) -> CodexResponsesMetadata {
-    CodexResponsesMetadata::for_prewarm_request(
-        installation_id.to_string(),
-        session_id.to_string(),
-        thread_id.to_string(),
-        turn_id,
-        window_id,
-        session_source,
-        parent_thread_id,
-    )
-}
-
-pub fn websocket_connection_responses_metadata(
-    installation_id: &str,
-    session_id: &str,
-    thread_id: &str,
-    window_id: String,
-    session_source: &SessionSource,
-    parent_thread_id: Option<ThreadId>,
-) -> CodexResponsesMetadata {
-    CodexResponsesMetadata::for_websocket_connection(
-        installation_id.to_string(),
-        session_id.to_string(),
-        thread_id.to_string(),
-        window_id,
-        session_source,
-        parent_thread_id,
-    )
 }
 
 /// Fetch a DotSlash resource and return the resolved executable/file path.
