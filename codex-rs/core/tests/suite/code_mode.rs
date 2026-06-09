@@ -2537,6 +2537,48 @@ image("data:image/png;base64,AAA");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resize_all_images_replaces_malformed_code_mode_image_only() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_config(
+        &server,
+        "use exec to return images",
+        r#"
+image("https://example.com/image.jpg");
+image("data:image/png;base64,AAA");
+"#,
+        |config| {
+            let _ = config.features.enable(Feature::ResizeAllImages);
+        },
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(success, Some(false));
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        items[1],
+        serde_json::json!({
+            "type": "input_image",
+            "image_url": "https://example.com/image.jpg",
+            "detail": "high"
+        })
+    );
+    assert_eq!(
+        items[2],
+        serde_json::json!({
+            "type": "input_text",
+            "text": "image content omitted because it could not be processed"
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

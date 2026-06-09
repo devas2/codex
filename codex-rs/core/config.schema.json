@@ -572,6 +572,9 @@
             "request_rule": {
               "type": "boolean"
             },
+            "resize_all_images": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -4696,6 +4699,9 @@
           "type": "boolean"
         },
         "request_rule": {
+          "type": "boolean"
+        },
+        "resize_all_images": {
           "type": "boolean"
         },
         "responses_websockets": {

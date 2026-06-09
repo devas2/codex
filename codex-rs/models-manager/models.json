@@ -11,6 +11,7 @@
         "image"
       ],
       "supports_image_detail_original": true,
+      "auto_image_detail": "original",
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000

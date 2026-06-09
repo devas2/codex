@@ -153,6 +153,16 @@ pub enum InputModality {
     Image,
 }
 
+/// Budget used when an image is tagged with `detail: "auto"`.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoImageDetail {
+    /// Treat `detail: "auto"` as `detail: "high"`.
+    High,
+    /// Treat `detail: "auto"` as `detail: "original"`.
+    Original,
+}
+
 /// Backward-compatible default when `input_modalities` is omitted on the wire.
 ///
 /// Legacy payloads predate modality metadata, so we conservatively assume both text and images are
@@ -379,6 +389,12 @@ pub struct ModelInfo {
     pub supports_parallel_tool_calls: bool,
     #[serde(default)]
     pub supports_image_detail_original: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_model_selector"
+    )]
+    pub auto_image_detail: Option<AutoImageDetail>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
     /// Maximum context window allowed for config overrides.
@@ -668,6 +684,7 @@ mod tests {
             truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
             supports_parallel_tool_calls: false,
             supports_image_detail_original: false,
+            auto_image_detail: None,
             context_window: None,
             max_context_window: None,
             auto_compact_token_limit: None,
@@ -937,6 +954,7 @@ mod tests {
 
         assert_eq!(model.availability_nux, None);
         assert!(!model.supports_image_detail_original);
+        assert_eq!(model.auto_image_detail, None);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
         assert!(!model.use_responses_lite);
@@ -958,6 +976,43 @@ mod tests {
         let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
 
         assert_eq!(model.tool_mode, Some(ToolMode::CodeModeOnly));
+    }
+
+    #[test]
+    fn model_info_deserializes_auto_image_detail() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
+        let object = value
+            .as_object_mut()
+            .expect("model info should be an object");
+        object.insert(
+            "auto_image_detail".to_string(),
+            serde_json::Value::String("original".to_string()),
+        );
+        let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
+
+        assert_eq!(model.auto_image_detail, Some(AutoImageDetail::Original));
+    }
+
+    #[test]
+    fn model_info_treats_unknown_auto_image_detail_as_omitted() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
+        let object = value
+            .as_object_mut()
+            .expect("model info should be an object");
+        object.insert(
+            "auto_image_detail".to_string(),
+            serde_json::Value::String("future_image_detail".to_string()),
+        );
+        let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
+
+        assert_eq!(model.auto_image_detail, None);
+        let serialized = serde_json::to_value(model).expect("serialize model info");
+        let object = serialized
+            .as_object()
+            .expect("model info should be an object");
+        assert!(!object.contains_key("auto_image_detail"));
     }
 
     #[test]
