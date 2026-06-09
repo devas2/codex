@@ -63,23 +63,6 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
     }
 }
 
-pub async fn build_turn_metadata_header(
-    cwd: &AbsolutePathBuf,
-    sandbox: Option<&str>,
-) -> Option<String> {
-    detached_memory_responses_metadata(
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        &SessionSource::Unknown,
-        cwd,
-        sandbox,
-    )
-    .await
-    .turn_metadata_json()
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn detached_memory_responses_metadata(
     installation_id: String,

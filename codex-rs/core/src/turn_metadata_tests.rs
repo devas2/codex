@@ -110,11 +110,20 @@ async fn create_clean_git_repo(repo_name: &str) -> (TempDir, AbsolutePathBuf) {
 }
 
 #[tokio::test]
-async fn build_turn_metadata_header_marks_detached_memory_without_turn_identity() {
+async fn detached_memory_responses_metadata_omits_turn_identity() {
     let (_temp_dir, repo_path) = create_clean_git_repo("repo-東京").await;
 
-    let header = build_turn_metadata_header(&repo_path, Some("none"))
+    let header = detached_memory_responses_metadata(
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        &SessionSource::Unknown,
+        &repo_path,
+        Some("none"),
+    )
         .await
+        .turn_metadata_json()
         .expect("header");
     assert!(header.is_ascii());
     assert!(!header.contains("東京"));
@@ -146,12 +155,21 @@ async fn build_turn_metadata_header_marks_detached_memory_without_turn_identity(
 }
 
 #[tokio::test]
-async fn build_turn_metadata_header_marks_memory_without_workspace_metadata() {
+async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
 
-    let header = build_turn_metadata_header(&cwd, /*sandbox*/ None)
+    let header = detached_memory_responses_metadata(
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        &SessionSource::Unknown,
+        &cwd,
+        /*sandbox*/ None,
+    )
         .await
+        .turn_metadata_json()
         .expect("detached memory should emit its request kind");
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
 
