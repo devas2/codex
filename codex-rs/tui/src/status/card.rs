@@ -45,6 +45,7 @@ use super::rate_limits::StatusRateLimitValue;
 use super::rate_limits::compose_rate_limit_data;
 use super::rate_limits::compose_rate_limit_data_many;
 use super::rate_limits::format_status_limit_summary;
+use super::rate_limits::render_status_context_progress_bar;
 use super::rate_limits::render_status_limit_progress_bar;
 use super::remote_connection::RemoteConnectionStatus;
 use crate::wrapping::RtOptions;
@@ -398,6 +399,8 @@ impl StatusHistoryCell {
         let window_fmt = format_tokens_compact(context.window);
 
         Some(vec![
+            Span::from(render_status_context_progress_bar(percent as f64)),
+            Span::from(" "),
             Span::from(format!("{percent}% left")),
             Span::from(" (").dim(),
             Span::from(used_fmt).dim(),

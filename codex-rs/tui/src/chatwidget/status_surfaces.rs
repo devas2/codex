@@ -10,6 +10,7 @@ use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
 use crate::legacy_core::config::Config;
 use crate::status::format_tokens_compact;
+use crate::status::render_status_context_progress_bar;
 use codex_app_server_protocol::AskForApproval;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
@@ -601,10 +602,16 @@ impl ChatWidget {
             }
             StatusLineItem::ContextRemaining => self
                 .status_line_context_remaining_percent()
-                .map(|remaining| format!("Context {remaining}% left")),
+                .map(|remaining| {
+                    let bar = render_status_context_progress_bar(remaining as f64);
+                    format!("Context {bar} {remaining}% left")
+                }),
             StatusLineItem::ContextUsed => self
                 .status_line_context_used_percent()
-                .map(|used| format!("Context {used}% used")),
+                .map(|used| {
+                    let bar = render_status_context_progress_bar(used as f64);
+                    format!("Context {bar} {used}% used")
+                }),
             StatusLineItem::FiveHourLimit => {
                 let (window, is_secondary) = self
                     .rate_limit_snapshots_by_limit_id
