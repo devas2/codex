@@ -1167,7 +1167,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         ),
     ]);
 
-    let cancel_token = CancellationToken::new();
     let manager = McpConnectionManager::new(
         &mcp_servers,
         OAuthCredentialsStoreMode::default(),
@@ -1175,7 +1174,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         &approval_policy,
         String::new(),
         tx_event,
-        cancel_token.clone(),
         PermissionProfile::default(),
         McpRuntimeContext::new(
             Arc::new(EnvironmentManager::without_environments()),
@@ -1217,7 +1215,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         startup_outcome_error_message(error),
         "local stdio MCP server `stdio` requires a local environment"
     );
-    cancel_token.cancel();
+    manager.cancel_startup();
 }
 
 #[test]

@@ -307,7 +307,6 @@ impl Session {
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
-        elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
@@ -338,49 +337,30 @@ impl Session {
                 turn_context.cwd.to_path_buf(),
             ),
         };
-        let mcp_startup_cancellation_token = {
-            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            guard.cancel();
-            let cancellation_token = CancellationToken::new();
-            *guard = cancellation_token.clone();
-            cancellation_token
-        };
-        let refreshed_manager = McpConnectionManager::new(
-            &mcp_servers,
-            store_mode,
-            auth_statuses,
-            &turn_context.approval_policy,
-            turn_context.sub_id.clone(),
-            self.get_tx_event(),
-            mcp_startup_cancellation_token,
-            turn_context.permission_profile(),
-            mcp_runtime_context,
-            config.codex_home.to_path_buf(),
-            codex_apps_tools_cache_key(auth.as_ref()),
-            host_owned_codex_apps_enabled,
-            mcp_config.prefix_mcp_tool_names,
-            mcp_config.client_elicitation_capability,
-            tool_plugin_provenance,
-            auth.as_ref(),
-            elicitation_reviewer,
-        )
-        .await;
-        {
-            let current_manager = self.services.mcp_connection_manager.read().await;
-            refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
-        }
-        let mut old_manager = {
+        // Keep the installed manager reachable while replacing its connections. Wait for old
+        // clients to shut down only after releasing the manager lock.
+        let cleanup = {
             let mut manager = self.services.mcp_connection_manager.write().await;
-            std::mem::replace(&mut *manager, refreshed_manager)
+            manager.refresh(McpConnectionRefresh {
+                servers: mcp_servers,
+                store_mode,
+                auth_entries: auth_statuses,
+                submit_id: turn_context.sub_id.clone(),
+                tx_event: self.get_tx_event(),
+                runtime_context: mcp_runtime_context,
+                codex_home: config.codex_home.to_path_buf(),
+                codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth.as_ref()),
+                host_owned_codex_apps_enabled,
+                prefix_mcp_tool_names: mcp_config.prefix_mcp_tool_names,
+                client_elicitation_capability: mcp_config.client_elicitation_capability,
+                tool_plugin_provenance,
+                auth: auth.as_ref(),
+            })
         };
-        old_manager.shutdown().await;
+        cleanup.await;
     }
 
-    pub(crate) async fn refresh_mcp_servers_if_requested(
-        &self,
-        turn_context: &TurnContext,
-        elicitation_reviewer: Option<ElicitationReviewerHandle>,
-    ) {
+    pub(crate) async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
         let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
         let Some(refresh_config) = refresh_config else {
             return;
@@ -409,7 +389,7 @@ impl Session {
             }
         };
 
-        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode, elicitation_reviewer)
+        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode)
             .await;
     }
 
@@ -418,27 +398,17 @@ impl Session {
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
-        elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode, elicitation_reviewer)
+        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode)
             .await;
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn mcp_startup_cancellation_token(&self) -> CancellationToken {
-        self.services
-            .mcp_startup_cancellation_token
-            .lock()
-            .await
-            .clone()
     }
 
     pub(crate) async fn cancel_mcp_startup(&self) {
         self.services
-            .mcp_startup_cancellation_token
-            .lock()
+            .mcp_connection_manager
+            .read()
             .await
-            .cancel();
+            .cancel_startup();
     }
 }
 

@@ -114,7 +114,31 @@ pub struct McpConnectionManager {
     startup_cancellation_token: CancellationToken,
 }
 
+/// Inputs used to replace the manager's MCP server connections.
+///
+/// These values describe one refresh round and are passed in rather than retained by the
+/// manager.
+pub struct McpConnectionRefresh<'a> {
+    pub servers: HashMap<String, EffectiveMcpServer>,
+    pub store_mode: OAuthCredentialsStoreMode,
+    pub auth_entries: HashMap<String, McpAuthStatusEntry>,
+    pub submit_id: String,
+    pub tx_event: Sender<Event>,
+    pub runtime_context: McpRuntimeContext,
+    pub codex_home: PathBuf,
+    pub codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+    pub host_owned_codex_apps_enabled: bool,
+    pub prefix_mcp_tool_names: bool,
+    pub client_elicitation_capability: ElicitationCapability,
+    pub tool_plugin_provenance: ToolPluginProvenance,
+    pub auth: Option<&'a CodexAuth>,
+}
+
 impl McpConnectionManager {
+    /// Creates a manager and installs its initial MCP connection set.
+    ///
+    /// Startup continues asynchronously. Required-server readiness is validated separately after
+    /// the manager is installed so elicitation responses can reach it during initialization.
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         mcp_servers: &HashMap<String, EffectiveMcpServer>,
@@ -123,7 +147,6 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
         submit_id: String,
         tx_event: Sender<Event>,
-        startup_cancellation_token: CancellationToken,
         initial_permission_profile: PermissionProfile,
         runtime_context: McpRuntimeContext,
         codex_home: PathBuf,
@@ -135,7 +158,74 @@ impl McpConnectionManager {
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> Self {
-        let mut required_servers = mcp_servers
+        let elicitation_requests = ElicitationRequestManager::new(
+            approval_policy.value(),
+            initial_permission_profile,
+            elicitation_reviewer,
+        );
+        let mut manager = Self {
+            clients: HashMap::new(),
+            server_metadata: HashMap::new(),
+            required_servers: Vec::new(),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            host_owned_codex_apps_enabled,
+            prefix_mcp_tool_names,
+            elicitation_requests,
+            startup_cancellation_token: CancellationToken::new(),
+        };
+        let cleanup = manager.refresh(McpConnectionRefresh {
+            servers: mcp_servers.clone(),
+            store_mode,
+            auth_entries,
+            submit_id,
+            tx_event,
+            runtime_context,
+            codex_home,
+            codex_apps_tools_cache_key,
+            host_owned_codex_apps_enabled,
+            prefix_mcp_tool_names,
+            client_elicitation_capability,
+            tool_plugin_provenance,
+            auth,
+        });
+        cleanup.await;
+        manager
+    }
+
+    /// Replaces all MCP server connections while preserving manager-owned policy state.
+    ///
+    /// The manager remains installed so elicitation responses keep reaching the active request
+    /// scope. Each refresh starts a new cancellation and responder scope, which prevents pending
+    /// responders and terminal startup events from the previous round leaking into the new one.
+    ///
+    /// The returned future shuts down the replaced clients and should be awaited after releasing
+    /// any lock around the manager.
+    pub fn refresh(
+        &mut self,
+        refresh: McpConnectionRefresh<'_>,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let McpConnectionRefresh {
+            servers,
+            store_mode,
+            auth_entries,
+            submit_id,
+            tx_event,
+            runtime_context,
+            codex_home,
+            codex_apps_tools_cache_key,
+            host_owned_codex_apps_enabled,
+            prefix_mcp_tool_names,
+            client_elicitation_capability,
+            tool_plugin_provenance,
+            auth,
+        } = refresh;
+        // A refresh starts a distinct startup and elicitation round while retaining the policy
+        // state shared across rounds.
+        self.startup_cancellation_token.cancel();
+        self.startup_cancellation_token = CancellationToken::new();
+        self.elicitation_requests = self.elicitation_requests.new_request_scope();
+        let old_clients = std::mem::take(&mut self.clients);
+        let mut required_servers = servers
             .iter()
             .filter(|(_, server)| server.enabled() && server.required())
             .map(|(name, _)| name.clone())
@@ -144,32 +234,21 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut server_metadata = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests = ElicitationRequestManager::new(
-            approval_policy.value(),
-            initial_permission_profile,
-            elicitation_reviewer,
-        );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
-        let startup_submit_id = submit_id.clone();
+        let startup_submit_id = submit_id;
         let codex_apps_auth_provider = auth
             .filter(|auth| auth.uses_codex_backend())
             .map(codex_model_provider::auth_provider_from_auth);
-        let mcp_servers = mcp_servers.clone();
-        for (server_name, server) in mcp_servers
-            .into_iter()
-            .filter(|(_, server)| server.enabled())
-        {
+        for (server_name, server) in servers.into_iter().filter(|(_, server)| server.enabled()) {
             server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
-            let cancel_token = startup_cancellation_token.child_token();
-            let _ = emit_update(
-                startup_submit_id.as_str(),
-                &tx_event,
-                McpStartupUpdateEvent {
+            let cancel_token = self.startup_cancellation_token.child_token();
+            let _ = tx_event.try_send(Event {
+                id: startup_submit_id.clone(),
+                msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
                     server: server_name.clone(),
                     status: McpStartupStatus::Starting,
-                },
-            )
-            .await;
+                }),
+            });
             let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 Some(CodexAppsToolsCacheContext {
                     codex_home: codex_home.clone(),
@@ -200,7 +279,7 @@ impl McpConnectionManager {
                 store_mode,
                 cancel_token.clone(),
                 tx_event.clone(),
-                elicitation_requests.clone(),
+                self.elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_context.clone(),
@@ -229,29 +308,28 @@ impl McpConnectionManager {
                     }
                 };
 
-                let _ = emit_update(
-                    submit_id.as_str(),
-                    &tx_event,
-                    McpStartupUpdateEvent {
-                        server: server_name.clone(),
-                        status,
-                    },
-                )
-                .await;
+                if !cancel_token.is_cancelled() {
+                    let _ = emit_update(
+                        submit_id.as_str(),
+                        &tx_event,
+                        McpStartupUpdateEvent {
+                            server: server_name.clone(),
+                            status,
+                        },
+                    )
+                    .await;
+                }
 
                 (server_name, outcome)
             });
         }
-        let manager = Self {
-            clients,
-            server_metadata,
-            required_servers,
-            tool_plugin_provenance,
-            host_owned_codex_apps_enabled,
-            prefix_mcp_tool_names,
-            elicitation_requests: elicitation_requests.clone(),
-            startup_cancellation_token: startup_cancellation_token.clone(),
-        };
+        self.clients = clients;
+        self.server_metadata = server_metadata;
+        self.required_servers = required_servers;
+        self.tool_plugin_provenance = tool_plugin_provenance;
+        self.host_owned_codex_apps_enabled = host_owned_codex_apps_enabled;
+        self.prefix_mcp_tool_names = prefix_mcp_tool_names;
+        let startup_cancellation_token = self.startup_cancellation_token.clone();
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
@@ -267,14 +345,21 @@ impl McpConnectionManager {
                     }
                 }
             }
-            let _ = tx_event
-                .send(Event {
-                    id: startup_submit_id,
-                    msg: EventMsg::McpStartupComplete(summary),
-                })
-                .await;
+            if !startup_cancellation_token.is_cancelled() {
+                let _ = tx_event
+                    .send(Event {
+                        id: startup_submit_id,
+                        msg: EventMsg::McpStartupComplete(summary),
+                    })
+                    .await;
+            }
         });
-        manager
+
+        async move {
+            for client in old_clients.into_values() {
+                client.shutdown().await;
+            }
+        }
     }
 
     /// Waits for every required server and reports their startup failures together.
@@ -346,6 +431,11 @@ impl McpConnectionManager {
 
     pub fn has_servers(&self) -> bool {
         !self.clients.is_empty()
+    }
+
+    /// Cancels the active startup round without shutting down clients that are already ready.
+    pub fn cancel_startup(&self) {
+        self.startup_cancellation_token.cancel();
     }
 
     /// Drain all MCP clients from this manager and return a future that stops
