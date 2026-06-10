@@ -76,6 +76,7 @@ type ResizeFn = Box<dyn FnMut(TerminalSize) -> anyhow::Result<()> + Send>;
 
 /// Handle for driving an interactive process (PTY or pipe).
 pub struct ProcessHandle {
+    child_pid: Option<u32>,
     writer_tx: StdMutex<Option<mpsc::Sender<Vec<u8>>>>,
     killer: StdMutex<Option<Box<dyn ChildTerminator>>>,
     reader_handle: StdMutex<Option<JoinHandle<()>>>,
@@ -101,6 +102,7 @@ impl fmt::Debug for ProcessHandle {
 impl ProcessHandle {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        child_pid: Option<u32>,
         writer_tx: mpsc::Sender<Vec<u8>>,
         killer: Box<dyn ChildTerminator>,
         reader_handle: JoinHandle<()>,
@@ -113,6 +115,7 @@ impl ProcessHandle {
         resizer: Option<ResizeFn>,
     ) -> Self {
         Self {
+            child_pid,
             writer_tx: StdMutex::new(Some(writer_tx)),
             killer: StdMutex::new(Some(killer)),
             reader_handle: StdMutex::new(Some(reader_handle)),
@@ -124,6 +127,11 @@ impl ProcessHandle {
             _pty_handles: StdMutex::new(pty_handles),
             resizer: StdMutex::new(resizer),
         }
+    }
+
+    /// Returns the local child process ID when one is available.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child_pid
     }
 
     /// Returns a channel sender for writing raw bytes to the child stdin.
@@ -297,7 +305,6 @@ pub struct SpawnedProcess {
     pub stdout_rx: mpsc::Receiver<Vec<u8>>,
     pub stderr_rx: mpsc::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
-    pub child_pid: Option<u32>,
 }
 
 /// Driver-backed process handles for non-standard spawn backends.
@@ -385,6 +392,7 @@ pub fn spawn_from_driver(driver: ProcessDriver) -> SpawnedProcess {
     });
 
     let handle = ProcessHandle::new(
+        /*child_pid*/ None,
         writer_tx,
         Box::new(ClosureTerminator { inner: terminator }),
         reader_handle,
@@ -405,6 +413,5 @@ pub fn spawn_from_driver(driver: ProcessDriver) -> SpawnedProcess {
         stdout_rx,
         stderr_rx,
         exit_rx: exit_rx_out,
-        child_pid: None,
     }
 }

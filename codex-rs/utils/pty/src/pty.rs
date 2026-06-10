@@ -230,6 +230,7 @@ async fn spawn_process_portable(
     };
 
     let handle = ProcessHandle::new(
+        child_pid,
         writer_tx,
         Box::new(PtyChildTerminator {
             killer,
@@ -251,7 +252,6 @@ async fn spawn_process_portable(
         stdout_rx,
         stderr_rx,
         exit_rx,
-        child_pid,
     })
 }
 
@@ -389,6 +389,7 @@ async fn spawn_process_preserving_fds(
     };
 
     let handle = ProcessHandle::new(
+        Some(process_group_id),
         writer_tx,
         Box::new(RawPidTerminator { process_group_id }),
         reader_handle,
@@ -406,7 +407,6 @@ async fn spawn_process_preserving_fds(
         stdout_rx,
         stderr_rx,
         exit_rx,
-        child_pid: Some(process_group_id),
     })
 }
 
