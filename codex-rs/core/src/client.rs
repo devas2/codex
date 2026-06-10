@@ -413,6 +413,25 @@ impl ModelClient {
         format!("{thread_id}:{window_generation}")
     }
 
+    /// Returns client-owned Responses metadata for low-level public requests that are not
+    /// associated with a Codex turn or request kind.
+    ///
+    /// The returned snapshot carries identity and lineage that must stay consistent with this
+    /// `ModelClient`. Core turn, prewarm, compaction, and detached-memory paths should construct
+    /// complete request-scoped metadata at dispatch instead of using this unscoped snapshot.
+    pub fn unscoped_responses_metadata(&self) -> CodexResponsesMetadata {
+        CodexResponsesMetadata {
+            parent_thread_id: self.state.parent_thread_id,
+            subagent_header: subagent_header_value(&self.state.session_source),
+            ..CodexResponsesMetadata::new(
+                self.state.installation_id.clone(),
+                self.state.session_id.to_string(),
+                self.state.thread_id.to_string(),
+                self.current_window_id(),
+            )
+        }
+    }
+
     fn take_cached_websocket_session(&self) -> WebsocketSession {
         let mut cached_websocket_session = self
             .state
