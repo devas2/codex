@@ -11,7 +11,7 @@ use crate::tools::handlers::request_user_input_spec::request_user_input_tool_des
 use crate::tools::handlers::request_user_input_spec::request_user_input_unavailable_message;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use codex_extension_api::RequestUserInputSuppression;
+use codex_extension_api::ToolAvailability;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_tools::ToolName;
@@ -58,10 +58,8 @@ impl ToolExecutor<ToolInvocation> for RequestUserInputHandler {
             ));
         }
 
-        if let Some(suppression) = turn.extension_data.get::<RequestUserInputSuppression>() {
-            return Err(FunctionCallError::RespondToModel(
-                suppression.unavailable_message().to_string(),
-            ));
+        if let Some(unavailability_reason) = tool_unavailable_for_turn(turn.as_ref()) {
+            return Err(FunctionCallError::RespondToModel(unavailability_reason));
         }
 
         let mode = session.collaboration_mode().await.mode;
@@ -95,6 +93,12 @@ impl ToolExecutor<ToolInvocation> for RequestUserInputHandler {
 }
 
 impl CoreToolRuntime for RequestUserInputHandler {}
+
+fn tool_unavailable_for_turn(turn: &crate::session::turn_context::TurnContext) -> Option<String> {
+    turn.extension_data
+        .get::<ToolAvailability>()?
+        .unavailability_reason(&ToolName::plain(REQUEST_USER_INPUT_TOOL_NAME))
+}
 
 #[cfg(test)]
 #[path = "request_user_input_tests.rs"]
