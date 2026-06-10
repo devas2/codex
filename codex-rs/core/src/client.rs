@@ -71,7 +71,6 @@ use codex_login::default_client::build_reqwest_client;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 
-use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
@@ -171,14 +170,11 @@ pub(crate) struct CompactConversationRequestSettings {
 /// configuration is per turn and is passed explicitly to streaming/unary methods.
 #[derive(Debug)]
 struct ModelClientState {
-    session_id: SessionId,
     thread_id: ThreadId,
     window_generation: AtomicU64,
-    installation_id: String,
     provider: SharedModelProvider,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
-    parent_thread_id: Option<ThreadId>,
     model_verbosity: Option<VerbosityConfig>,
     enable_request_compression: bool,
     include_timing_metrics: bool,
@@ -322,12 +318,9 @@ impl ModelClient {
     /// are passed to [`ModelClientSession::stream`] (and other turn-scoped methods) explicitly.
     pub fn new(
         auth_manager: Option<Arc<AuthManager>>,
-        session_id: SessionId,
         thread_id: ThreadId,
-        installation_id: String,
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
-        parent_thread_id: Option<ThreadId>,
         model_verbosity: Option<VerbosityConfig>,
         enable_request_compression: bool,
         include_timing_metrics: bool,
@@ -344,14 +337,11 @@ impl ModelClient {
         let include_attestation = model_provider.supports_attestation();
         Self {
             state: Arc::new(ModelClientState {
-                session_id,
                 thread_id,
                 window_generation: AtomicU64::new(0),
-                installation_id,
                 provider: model_provider,
                 auth_env_telemetry,
                 session_source,
-                parent_thread_id,
                 model_verbosity,
                 enable_request_compression,
                 include_timing_metrics,

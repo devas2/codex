@@ -24,7 +24,6 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
-use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -63,24 +62,16 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
-fn test_model_client(session_source: SessionSource) -> ModelClient {
-    test_model_client_with_parent(session_source, /*parent_thread_id*/ None)
-}
+const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
-fn test_model_client_with_parent(
-    session_source: SessionSource,
-    parent_thread_id: Option<ThreadId>,
-) -> ModelClient {
+fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     let thread_id = ThreadId::new();
     ModelClient::new(
         /*auth_manager*/ None,
-        thread_id.into(),
         thread_id,
-        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         session_source,
-        parent_thread_id,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
@@ -92,16 +83,18 @@ fn test_model_client_with_parent(
 fn test_responses_metadata_for_client(
     client: &ModelClient,
     turn_id: Option<&str>,
+    parent_thread_id: Option<ThreadId>,
     request_kind: TestCodexResponsesRequestKind,
 ) -> CodexResponsesMetadata {
+    let thread_id = client.state.thread_id.to_string();
     test_responses_metadata(
-        &client.state.installation_id,
-        &client.state.session_id.to_string(),
-        &client.state.thread_id.to_string(),
+        TEST_INSTALLATION_ID,
+        &thread_id,
+        &thread_id,
         turn_id,
         client.current_window_id(),
         &client.state.session_source,
-        client.state.parent_thread_id,
+        parent_thread_id,
         request_kind,
     )
 }
@@ -300,28 +293,25 @@ fn build_subagent_headers_sets_internal_memory_consolidation_label() {
 #[test]
 fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
     let parent_thread_id = ThreadId::new();
-    let client = test_model_client_with_parent(
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id,
-            depth: 2,
-            agent_path: None,
-            agent_nickname: None,
-            agent_role: None,
-        }),
-        Some(parent_thread_id),
-    );
+    let client = test_model_client(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 2,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    }));
 
     client.advance_window_generation();
 
     let responses_metadata = test_responses_metadata_for_client(
         &client,
         Some("turn-123"),
+        Some(parent_thread_id),
         TestCodexResponsesRequestKind::Turn,
     );
     let client_metadata =
         client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
     let thread_id = client.state.thread_id;
-    let session_id = client.state.session_id.to_string();
     let thread_id = thread_id.to_string();
     let parent_thread_id = parent_thread_id.to_string();
     let expected_window_id = format!("{thread_id}:1");
@@ -337,7 +327,7 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             "installation_id",
             "11111111-1111-4111-8111-111111111111",
         ),
-        ("session_id", "session_id", session_id.as_str()),
+        ("session_id", "session_id", thread_id.as_str()),
         ("thread_id", "thread_id", thread_id.as_str()),
         ("turn_id", "turn_id", "turn-123"),
         (
@@ -569,12 +559,9 @@ fn model_client_with_counting_attestation(
     };
     let model_client = ModelClient::new(
         auth_manager,
-        SessionId::new(),
         ThreadId::new(),
-        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         SessionSource::Exec,
-        /*parent_thread_id*/ None,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
@@ -593,6 +580,7 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
     let responses_metadata = test_responses_metadata_for_client(
         &model_client,
         /*turn_id*/ None,
+        /*parent_thread_id*/ None,
         TestCodexResponsesRequestKind::WebsocketConnection,
     );
 
