@@ -6838,7 +6838,7 @@ where
         thread_source: None,
         dynamic_tools,
         inherited_shell_snapshot: None,
-        user_shell_override: None,
+        user_shell_override: config.user_shell.clone(),
     };
     let per_turn_config =
         Session::build_per_turn_config(&session_configuration, session_configuration.cwd().clone());
@@ -7191,6 +7191,30 @@ async fn environment_context_uses_session_shell_when_environment_shell_is_absent
     assert!(
         environment_context.contains("<shell>cmd</shell>"),
         "{environment_context}"
+    );
+}
+
+#[tokio::test]
+async fn session_uses_configured_user_shell() {
+    let configured_shell = crate::shell::Shell {
+        shell_type: crate::shell::ShellType::Bash,
+        shell_path: PathBuf::from("bash"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    };
+    let (session, _turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config.user_shell = Some(configured_shell);
+        },
+    )
+    .await;
+    let session_shell = session.user_shell();
+
+    assert_eq!(session_shell.name(), "bash");
+    assert_eq!(
+        session_shell.derive_exec_args("ls -lah", /*use_login_shell*/ true),
+        vec!["bash".to_string(), "-lc".to_string(), "ls -lah".to_string()]
     );
 }
 

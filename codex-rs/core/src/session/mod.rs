@@ -622,7 +622,7 @@ impl Codex {
             thread_source,
             dynamic_tools,
             inherited_shell_snapshot,
-            user_shell_override,
+            user_shell_override: user_shell_override.or_else(|| config.user_shell.clone()),
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
