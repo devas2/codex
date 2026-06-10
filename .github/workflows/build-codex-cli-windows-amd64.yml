@@ -32,6 +32,17 @@ jobs:
         with:
           targets: ${{ env.TARGET }}
 
+      - name: Work around rustc recursion limit on Windows
+        shell: powershell
+        run: |
+          $path = "app-server/src/lib.rs"
+          $text = [System.IO.File]::ReadAllText($path)
+          if (-not $text.StartsWith('#![recursion_limit')) {
+            $patched = "#![recursion_limit = `"256`"]`n$text"
+            $encoding = [System.Text.UTF8Encoding]::new($false)
+            [System.IO.File]::WriteAllText($path, $patched, $encoding)
+          }
+
       - name: Print runner specs
         shell: powershell
         run: |
