@@ -154,6 +154,27 @@ pub struct CodexResponsesMetadata {
 }
 
 impl CodexResponsesMetadata {
+    /// Builds metadata for a low-level public Responses request that is not associated with a
+    /// Codex turn or request kind.
+    ///
+    /// Callers should pass the same installation, session, thread, window, and lineage inputs
+    /// used to construct the `ModelClient` that will send the request. Core turn, prewarm,
+    /// compaction, and detached-memory paths construct complete request-scoped metadata instead.
+    pub fn unscoped(
+        installation_id: String,
+        session_id: String,
+        thread_id: String,
+        window_id: String,
+        session_source: &SessionSource,
+        parent_thread_id: Option<ThreadId>,
+    ) -> Self {
+        Self {
+            parent_thread_id,
+            subagent_header: subagent_header_value(session_source),
+            ..Self::new(installation_id, session_id, thread_id, window_id)
+        }
+    }
+
     pub(crate) fn new(
         installation_id: String,
         session_id: String,
