@@ -134,6 +134,15 @@ pub struct McpConnectionRefresh<'a> {
     pub auth: Option<&'a CodexAuth>,
 }
 
+struct StartedMcpConnections {
+    clients: HashMap<String, AsyncManagedClient>,
+    server_metadata: HashMap<String, McpServerMetadata>,
+    required_servers: Vec<String>,
+    tool_plugin_provenance: Arc<ToolPluginProvenance>,
+    host_owned_codex_apps_enabled: bool,
+    prefix_mcp_tool_names: bool,
+}
+
 impl McpConnectionManager {
     /// Creates a manager and installs its initial MCP connection set.
     ///
@@ -163,33 +172,36 @@ impl McpConnectionManager {
             initial_permission_profile,
             elicitation_reviewer,
         );
-        let mut manager = Self {
-            clients: HashMap::new(),
-            server_metadata: HashMap::new(),
-            required_servers: Vec::new(),
-            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
-            host_owned_codex_apps_enabled,
-            prefix_mcp_tool_names,
+        let startup_cancellation_token = CancellationToken::new();
+        let connections = start_connections(
+            McpConnectionRefresh {
+                servers: mcp_servers.clone(),
+                store_mode,
+                auth_entries,
+                submit_id,
+                tx_event,
+                runtime_context,
+                codex_home,
+                codex_apps_tools_cache_key,
+                host_owned_codex_apps_enabled,
+                prefix_mcp_tool_names,
+                client_elicitation_capability,
+                tool_plugin_provenance,
+                auth,
+            },
+            &elicitation_requests,
+            &startup_cancellation_token,
+        );
+        Self {
+            clients: connections.clients,
+            server_metadata: connections.server_metadata,
+            required_servers: connections.required_servers,
+            tool_plugin_provenance: connections.tool_plugin_provenance,
+            host_owned_codex_apps_enabled: connections.host_owned_codex_apps_enabled,
+            prefix_mcp_tool_names: connections.prefix_mcp_tool_names,
             elicitation_requests,
-            startup_cancellation_token: CancellationToken::new(),
-        };
-        let cleanup = manager.refresh(McpConnectionRefresh {
-            servers: mcp_servers.clone(),
-            store_mode,
-            auth_entries,
-            submit_id,
-            tx_event,
-            runtime_context,
-            codex_home,
-            codex_apps_tools_cache_key,
-            host_owned_codex_apps_enabled,
-            prefix_mcp_tool_names,
-            client_elicitation_capability,
-            tool_plugin_provenance,
-            auth,
-        });
-        cleanup.await;
-        manager
+            startup_cancellation_token,
+        }
     }
 
     /// Replaces all MCP server connections while preserving manager-owned policy state.
@@ -204,156 +216,21 @@ impl McpConnectionManager {
         &mut self,
         refresh: McpConnectionRefresh<'_>,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
-        let McpConnectionRefresh {
-            servers,
-            store_mode,
-            auth_entries,
-            submit_id,
-            tx_event,
-            runtime_context,
-            codex_home,
-            codex_apps_tools_cache_key,
-            host_owned_codex_apps_enabled,
-            prefix_mcp_tool_names,
-            client_elicitation_capability,
-            tool_plugin_provenance,
-            auth,
-        } = refresh;
         // A refresh starts a distinct startup and elicitation round while retaining the policy
         // state shared across rounds.
         self.startup_cancellation_token.cancel();
-        self.startup_cancellation_token = CancellationToken::new();
-        self.elicitation_requests = self.elicitation_requests.new_request_scope();
-        let old_clients = std::mem::take(&mut self.clients);
-        let mut required_servers = servers
-            .iter()
-            .filter(|(_, server)| server.enabled() && server.required())
-            .map(|(name, _)| name.clone())
-            .collect::<Vec<_>>();
-        required_servers.sort();
-        let mut clients = HashMap::new();
-        let mut server_metadata = HashMap::new();
-        let mut join_set = JoinSet::new();
-        let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
-        let startup_submit_id = submit_id;
-        let codex_apps_auth_provider = auth
-            .filter(|auth| auth.uses_codex_backend())
-            .map(codex_model_provider::auth_provider_from_auth);
-        for (server_name, server) in servers.into_iter().filter(|(_, server)| server.enabled()) {
-            server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
-            let cancel_token = self.startup_cancellation_token.child_token();
-            let _ = tx_event.try_send(Event {
-                id: startup_submit_id.clone(),
-                msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
-                    server: server_name.clone(),
-                    status: McpStartupStatus::Starting,
-                }),
-            });
-            let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                Some(CodexAppsToolsCacheContext {
-                    codex_home: codex_home.clone(),
-                    user_key: codex_apps_tools_cache_key.clone(),
-                })
-            } else {
-                None
-            };
-            let uses_env_bearer_token =
-                server
-                    .configured_config()
-                    .is_some_and(|config| match &config.transport {
-                        McpServerTransportConfig::StreamableHttp {
-                            bearer_token_env_var,
-                            ..
-                        } => bearer_token_env_var.is_some(),
-                        McpServerTransportConfig::Stdio { .. } => false,
-                    });
-            let runtime_auth_provider =
-                if server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token {
-                    codex_apps_auth_provider.clone()
-                } else {
-                    None
-                };
-            let async_managed_client = AsyncManagedClient::new(
-                server_name.clone(),
-                server,
-                store_mode,
-                cancel_token.clone(),
-                tx_event.clone(),
-                self.elicitation_requests.clone(),
-                codex_apps_tools_cache_context,
-                Arc::clone(&tool_plugin_provenance),
-                runtime_context.clone(),
-                runtime_auth_provider,
-                client_elicitation_capability.clone(),
-            );
-            clients.insert(server_name.clone(), async_managed_client.clone());
-            let tx_event = tx_event.clone();
-            let submit_id = startup_submit_id.clone();
-            let auth_entry = auth_entries.get(&server_name).cloned();
-            join_set.spawn(async move {
-                let mut outcome = async_managed_client.client().await;
-                if cancel_token.is_cancelled() {
-                    outcome = Err(StartupOutcomeError::Cancelled);
-                }
-                let status = match &outcome {
-                    Ok(_) => McpStartupStatus::Ready,
-                    Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
-                    Err(error) => {
-                        let error_str = mcp_init_error_display(
-                            server_name.as_str(),
-                            auth_entry.as_ref(),
-                            error,
-                        );
-                        McpStartupStatus::Failed { error: error_str }
-                    }
-                };
-
-                if !cancel_token.is_cancelled() {
-                    let _ = emit_update(
-                        submit_id.as_str(),
-                        &tx_event,
-                        McpStartupUpdateEvent {
-                            server: server_name.clone(),
-                            status,
-                        },
-                    )
-                    .await;
-                }
-
-                (server_name, outcome)
-            });
-        }
-        self.clients = clients;
-        self.server_metadata = server_metadata;
-        self.required_servers = required_servers;
-        self.tool_plugin_provenance = tool_plugin_provenance;
-        self.host_owned_codex_apps_enabled = host_owned_codex_apps_enabled;
-        self.prefix_mcp_tool_names = prefix_mcp_tool_names;
-        let startup_cancellation_token = self.startup_cancellation_token.clone();
-        tokio::spawn(async move {
-            let outcomes = join_set.join_all().await;
-            let mut summary = McpStartupCompleteEvent::default();
-            for (server_name, outcome) in outcomes {
-                match outcome {
-                    Ok(_) => summary.ready.push(server_name),
-                    Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
-                    Err(StartupOutcomeError::Failed { error }) => {
-                        summary.failed.push(McpStartupFailure {
-                            server: server_name,
-                            error,
-                        })
-                    }
-                }
-            }
-            if !startup_cancellation_token.is_cancelled() {
-                let _ = tx_event
-                    .send(Event {
-                        id: startup_submit_id,
-                        msg: EventMsg::McpStartupComplete(summary),
-                    })
-                    .await;
-            }
-        });
+        let startup_cancellation_token = CancellationToken::new();
+        let elicitation_requests = self.elicitation_requests.new_request_scope();
+        let connections =
+            start_connections(refresh, &elicitation_requests, &startup_cancellation_token);
+        let old_clients = std::mem::replace(&mut self.clients, connections.clients);
+        self.server_metadata = connections.server_metadata;
+        self.required_servers = connections.required_servers;
+        self.tool_plugin_provenance = connections.tool_plugin_provenance;
+        self.host_owned_codex_apps_enabled = connections.host_owned_codex_apps_enabled;
+        self.prefix_mcp_tool_names = connections.prefix_mcp_tool_names;
+        self.elicitation_requests = elicitation_requests;
+        self.startup_cancellation_token = startup_cancellation_token;
 
         async move {
             for client in old_clients.into_values() {
@@ -914,6 +791,156 @@ impl Drop for McpConnectionManager {
     fn drop(&mut self) {
         self.startup_cancellation_token.cancel();
         self.clients.clear();
+    }
+}
+
+fn start_connections(
+    refresh: McpConnectionRefresh<'_>,
+    elicitation_requests: &ElicitationRequestManager,
+    startup_cancellation_token: &CancellationToken,
+) -> StartedMcpConnections {
+    let McpConnectionRefresh {
+        servers,
+        store_mode,
+        auth_entries,
+        submit_id,
+        tx_event,
+        runtime_context,
+        codex_home,
+        codex_apps_tools_cache_key,
+        host_owned_codex_apps_enabled,
+        prefix_mcp_tool_names,
+        client_elicitation_capability,
+        tool_plugin_provenance,
+        auth,
+    } = refresh;
+    let mut required_servers = servers
+        .iter()
+        .filter(|(_, server)| server.enabled() && server.required())
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    required_servers.sort();
+    let mut clients = HashMap::new();
+    let mut server_metadata = HashMap::new();
+    let mut join_set = JoinSet::new();
+    let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
+    let startup_submit_id = submit_id;
+    let codex_apps_auth_provider = auth
+        .filter(|auth| auth.uses_codex_backend())
+        .map(codex_model_provider::auth_provider_from_auth);
+    for (server_name, server) in servers.into_iter().filter(|(_, server)| server.enabled()) {
+        server_metadata.insert(server_name.clone(), McpServerMetadata::from(&server));
+        let cancel_token = startup_cancellation_token.child_token();
+        let _ = tx_event.try_send(Event {
+            id: startup_submit_id.clone(),
+            msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+                server: server_name.clone(),
+                status: McpStartupStatus::Starting,
+            }),
+        });
+        let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+            Some(CodexAppsToolsCacheContext {
+                codex_home: codex_home.clone(),
+                user_key: codex_apps_tools_cache_key.clone(),
+            })
+        } else {
+            None
+        };
+        let uses_env_bearer_token = server
+            .configured_config()
+            .is_some_and(|config| match &config.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    ..
+                } => bearer_token_env_var.is_some(),
+                McpServerTransportConfig::Stdio { .. } => false,
+            });
+        let runtime_auth_provider =
+            if server_name == CODEX_APPS_MCP_SERVER_NAME && !uses_env_bearer_token {
+                codex_apps_auth_provider.clone()
+            } else {
+                None
+            };
+        let async_managed_client = AsyncManagedClient::new(
+            server_name.clone(),
+            server,
+            store_mode,
+            cancel_token.clone(),
+            tx_event.clone(),
+            elicitation_requests.clone(),
+            codex_apps_tools_cache_context,
+            Arc::clone(&tool_plugin_provenance),
+            runtime_context.clone(),
+            runtime_auth_provider,
+            client_elicitation_capability.clone(),
+        );
+        clients.insert(server_name.clone(), async_managed_client.clone());
+        let tx_event = tx_event.clone();
+        let submit_id = startup_submit_id.clone();
+        let auth_entry = auth_entries.get(&server_name).cloned();
+        join_set.spawn(async move {
+            let mut outcome = async_managed_client.client().await;
+            if cancel_token.is_cancelled() {
+                outcome = Err(StartupOutcomeError::Cancelled);
+            }
+            let status = match &outcome {
+                Ok(_) => McpStartupStatus::Ready,
+                Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+                Err(error) => {
+                    let error_str =
+                        mcp_init_error_display(server_name.as_str(), auth_entry.as_ref(), error);
+                    McpStartupStatus::Failed { error: error_str }
+                }
+            };
+
+            if !cancel_token.is_cancelled() {
+                let _ = emit_update(
+                    submit_id.as_str(),
+                    &tx_event,
+                    McpStartupUpdateEvent {
+                        server: server_name.clone(),
+                        status,
+                    },
+                )
+                .await;
+            }
+
+            (server_name, outcome)
+        });
+    }
+    let completion_cancellation_token = startup_cancellation_token.clone();
+    tokio::spawn(async move {
+        let outcomes = join_set.join_all().await;
+        let mut summary = McpStartupCompleteEvent::default();
+        for (server_name, outcome) in outcomes {
+            match outcome {
+                Ok(_) => summary.ready.push(server_name),
+                Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+                Err(StartupOutcomeError::Failed { error }) => {
+                    summary.failed.push(McpStartupFailure {
+                        server: server_name,
+                        error,
+                    })
+                }
+            }
+        }
+        if !completion_cancellation_token.is_cancelled() {
+            let _ = tx_event
+                .send(Event {
+                    id: startup_submit_id,
+                    msg: EventMsg::McpStartupComplete(summary),
+                })
+                .await;
+        }
+    });
+
+    StartedMcpConnections {
+        clients,
+        server_metadata,
+        required_servers,
+        tool_plugin_provenance,
+        host_owned_codex_apps_enabled,
+        prefix_mcp_tool_names,
     }
 }
 
