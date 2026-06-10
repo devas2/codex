@@ -216,7 +216,10 @@ mod tests {
         let line = status_line_from_segments_with_resolver(
             [
                 (StatusLineItem::ModelName, "gpt-5".to_string()),
-                (StatusLineItem::ContextUsed, "Context 12% used".to_string()),
+                (
+                    StatusLineItem::ContextUsed,
+                    "Context [█░░░░░░░░░] 12% used".to_string(),
+                ),
             ],
             /*use_theme_colors*/ true,
             |accent| match accent {
@@ -252,14 +255,17 @@ mod tests {
         let line = status_line_from_segments_with_resolver(
             [
                 (StatusLineItem::ModelName, "gpt-5".to_string()),
-                (StatusLineItem::ContextUsed, "Context 12% used".to_string()),
+                (
+                    StatusLineItem::ContextUsed,
+                    "Context [█░░░░░░░░░] 12% used".to_string(),
+                ),
             ],
             /*use_theme_colors*/ false,
             |_| Some(Style::default().red()),
         )
         .expect("status line");
 
-        assert_eq!(line_text(&line), "gpt-5 · Context 12% used");
+        assert_eq!(line_text(&line), "gpt-5 · Context [█░░░░░░░░░] 12% used");
         assert_eq!(line.spans[0].style.fg, None);
         assert!(line.spans[0].style.add_modifier.contains(Modifier::DIM));
         assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));

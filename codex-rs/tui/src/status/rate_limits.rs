@@ -21,6 +21,7 @@ use codex_app_server_protocol::SpendControlLimitSnapshot as CoreSpendControlLimi
 use codex_protocol::num_format::format_with_separators;
 
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
+const STATUS_CONTEXT_BAR_SEGMENTS: usize = 10;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
 const STATUS_LIMIT_BAR_EMPTY: &str = "░";
 
@@ -341,10 +342,19 @@ pub(crate) fn compose_rate_limit_data_many(
 /// This function expects a remaining value in the `0..=100` range and clamps out-of-range input.
 /// Passing a used percentage by mistake will invert the bar and mislead users.
 pub(crate) fn render_status_limit_progress_bar(percent_remaining: f64) -> String {
-    let ratio = (percent_remaining / 100.0).clamp(0.0, 1.0);
-    let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
-    let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
-    let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
+    render_status_progress_bar(percent_remaining, STATUS_LIMIT_BAR_SEGMENTS)
+}
+
+/// Renders a compact progress bar for context usage in status surfaces.
+pub(crate) fn render_status_context_progress_bar(percent_filled: f64) -> String {
+    render_status_progress_bar(percent_filled, STATUS_CONTEXT_BAR_SEGMENTS)
+}
+
+fn render_status_progress_bar(percent_filled: f64, segment_count: usize) -> String {
+    let ratio = (percent_filled / 100.0).clamp(0.0, 1.0);
+    let filled = (ratio * segment_count as f64).round() as usize;
+    let filled = filled.min(segment_count);
+    let empty = segment_count.saturating_sub(filled);
     format!(
         "[{}{}]",
         STATUS_LIMIT_BAR_FILLED.repeat(filled),
