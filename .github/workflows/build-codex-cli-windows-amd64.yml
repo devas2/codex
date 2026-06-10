@@ -1,0 +1,79 @@
+name: build-codex-cli-windows-amd64
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+  TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  build:
+    name: Build codex-cli for Windows amd64
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Print runner specs
+        shell: powershell
+        run: |
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $ramGiB = [math]::Round($computer.TotalPhysicalMemory / 1GB, 1)
+          Write-Host "Runner: $env:RUNNER_NAME"
+          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
+          Write-Host "CPU: $($cpu.Name)"
+          Write-Host "Logical CPUs: $($computer.NumberOfLogicalProcessors)"
+          Write-Host "Physical CPUs: $($computer.NumberOfProcessors)"
+          Write-Host "Total RAM: $ramGiB GiB"
+
+      - name: Build package archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dist_dir="dist/${TARGET}"
+          package_dir="${dist_dir}/codex-package"
+          archive_path="${dist_dir}/codex-cli-windows-amd64.zip"
+          mkdir -p "${dist_dir}"
+
+          python "${GITHUB_WORKSPACE}/scripts/build_codex_package.py" \
+            --target "${TARGET}" \
+            --variant codex \
+            --cargo-profile release \
+            --package-dir "${package_dir}" \
+            --archive-output "${archive_path}" \
+            --force
+
+      - name: Verify codex.exe
+        shell: bash
+        run: |
+          set -euo pipefail
+          "target/${TARGET}/release/codex.exe" --version
+          test -f "dist/${TARGET}/codex-cli-windows-amd64.zip"
+
+      - name: Upload Windows amd64 package
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-cli-windows-amd64
+          path: codex-rs/dist/x86_64-pc-windows-msvc/codex-cli-windows-amd64.zip
+          if-no-files-found: error
+          retention-days: 14

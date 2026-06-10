@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::HooksToml;
 use crate::permissions_toml::PermissionsToml;
@@ -184,6 +185,9 @@ pub struct ConfigToml {
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
+
+    /// Optional shell executable to use for shell-based tools.
+    pub shell_path: Option<PathBuf>,
 
     /// Whether the model may request a login shell for shell-based tools.
     /// Default to `true`
