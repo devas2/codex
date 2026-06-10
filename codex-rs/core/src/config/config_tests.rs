@@ -8858,6 +8858,45 @@ allow_login_shell = false
 }
 
 #[tokio::test]
+async fn config_loads_shell_path_from_toml() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let bin_dir = codex_home.path().join("bin");
+    std::fs::create_dir_all(&bin_dir)?;
+    let shell_path = bin_dir.join(if cfg!(windows) { "bash.exe" } else { "bash" });
+    std::fs::write(&shell_path, "")?;
+    let shell_path_for_toml = shell_path.to_string_lossy().replace('\\', "\\\\");
+    let cfg: ConfigToml = toml::from_str(&format!(
+        r#"
+model = "gpt-5.4"
+shell_path = "{shell_path_for_toml}"
+"#
+    ))
+    .expect("TOML deserialization should succeed for shell_path");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    let user_shell = config
+        .user_shell
+        .as_ref()
+        .expect("shell_path should resolve to a user shell");
+
+    assert_eq!(user_shell.name(), "bash");
+    assert_eq!(
+        user_shell.derive_exec_args("ls -lah", /*use_login_shell*/ true),
+        vec![
+            shell_path.to_string_lossy().to_string(),
+            "-lc".to_string(),
+            "ls -lah".to_string(),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn config_loads_apps_mcp_product_sku_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let toml = r#"

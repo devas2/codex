@@ -617,6 +617,9 @@ pub struct Config {
     /// Optionally specify the personality of the model
     pub personality: Option<Personality>,
 
+    /// Optional user-configured shell to use for shell-based tools.
+    pub user_shell: Option<crate::shell::Shell>,
+
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
 
@@ -3060,6 +3063,10 @@ impl Config {
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
+        let user_shell = cfg
+            .shell_path
+            .as_ref()
+            .map(crate::shell::get_shell_by_model_provided_path);
 
         let history = cfg.history.unwrap_or_default();
 
@@ -3418,6 +3425,7 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
+            user_shell,
             workspace_roots: workspace_roots.clone(),
             workspace_roots_explicit,
             startup_warnings,
