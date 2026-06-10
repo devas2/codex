@@ -303,7 +303,11 @@ impl McpConnectionManager {
         self.operation_gate.is_accepting() && !self.clients.is_empty()
     }
 
-    /// Stop all MCP clients owned by this manager and terminate stdio server processes.
+    /// Retires this manager and stops all clients after admitted operations finish.
+    ///
+    /// Shutdown is idempotent. It cancels pending startup work, rejects new
+    /// tracked operations, and waits for existing operations before terminating
+    /// client sessions and stdio server processes.
     pub async fn shutdown(&self) {
         self.startup_cancellation_token.cancel();
         self.operation_gate.begin_retirement();
@@ -793,6 +797,10 @@ impl McpConnectionManager {
         server_infos
     }
 
+    /// Registers an operation or returns a consistent error after retirement.
+    ///
+    /// The caller must retain the returned token for the operation's full
+    /// lifetime so shutdown cannot stop clients while they are in use.
     fn begin_operation(&self) -> Result<TaskTrackerToken> {
         self.operation_gate
             .begin_operation()

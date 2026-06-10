@@ -3,7 +3,11 @@ use std::sync::Mutex;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
-/// Tracks MCP operations that must finish before their manager can be retired.
+/// Coordinates operation admission with retirement of an MCP manager.
+///
+/// Operations hold a tracker token for their full lifetime. Retirement closes
+/// admission atomically with respect to token acquisition, then waits for
+/// previously admitted operations to release their tokens.
 #[derive(Debug)]
 pub(crate) struct McpOperationGate {
     accepting: Mutex<bool>,
@@ -18,6 +22,10 @@ impl McpOperationGate {
         }
     }
 
+    /// Admits an operation while the manager is active.
+    ///
+    /// The returned token must be retained until the operation finishes.
+    /// Returns `None` once retirement has begun.
     pub(crate) fn begin_operation(&self) -> Option<TaskTrackerToken> {
         let accepting = self
             .accepting
@@ -36,6 +44,7 @@ impl McpOperationGate {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Prevents new operations from starting while allowing admitted work to finish.
     pub(crate) fn begin_retirement(&self) {
         let mut accepting = self
             .accepting
@@ -45,6 +54,10 @@ impl McpOperationGate {
         self.operations.close();
     }
 
+    /// Waits for every operation admitted before retirement to finish.
+    ///
+    /// Callers must begin retirement first so the tracker cannot admit more
+    /// operations while this future is waiting.
     pub(crate) async fn wait_for_operations(&self) {
         self.operations.wait().await;
     }

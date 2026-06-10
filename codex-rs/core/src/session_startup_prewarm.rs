@@ -47,6 +47,7 @@ impl SessionStartupPrewarmHandle {
         }
     }
 
+    /// Aborts prewarming and waits until the task can no longer open a session.
     pub(crate) async fn abort(self) {
         self.task.abort();
         let _ = self.task.await;

@@ -18,6 +18,10 @@ impl McpConnectionManagerSlot {
         }
     }
 
+    /// Clones the published manager while holding the slot lock briefly.
+    ///
+    /// MCP work happens through the returned handle without retaining the read
+    /// lock, so long-running requests do not hold the publication lock.
     pub(crate) fn current(&self) -> Arc<McpConnectionManager> {
         let current = self
             .current
@@ -26,6 +30,10 @@ impl McpConnectionManagerSlot {
         Arc::clone(&*current)
     }
 
+    /// Publishes a new manager and returns the previous one for retirement.
+    ///
+    /// Returning the previous manager lets the caller wait for its admitted
+    /// operations and shut it down without holding the slot write lock.
     pub(crate) fn replace(&self, manager: McpConnectionManager) -> Arc<McpConnectionManager> {
         let manager = Arc::new(manager);
         let mut current = self
