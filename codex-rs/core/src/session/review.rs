@@ -140,6 +140,7 @@ pub(super) async fn spawn_review_thread(
         permission_profile: parent_turn_context.permission_profile(),
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
+        user_shell_type: parent_turn_context.user_shell_type,
         #[allow(deprecated)]
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
