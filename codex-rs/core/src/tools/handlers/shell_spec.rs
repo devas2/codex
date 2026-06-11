@@ -5,6 +5,8 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 
+use crate::shell::ShellType;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandToolOptions {
     pub allow_login_shell: bool,
@@ -151,7 +153,7 @@ pub fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
-pub fn create_shell_command_tool(options: CommandToolOptions) -> ToolSpec {
+pub fn create_shell_command_tool(options: CommandToolOptions, shell_type: ShellType) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -185,9 +187,10 @@ pub fn create_shell_command_tool(options: CommandToolOptions) -> ToolSpec {
         options.exec_permission_approvals_enabled,
     ));
 
-    let description = if cfg!(windows) {
-        format!(
-            r#"Runs a Powershell command (Windows) and returns its output.
+    let description = match shell_type {
+        ShellType::PowerShell => {
+            format!(
+                r#"Runs a PowerShell command and returns its output.
 
 Examples of valid command strings:
 
@@ -197,15 +200,71 @@ Examples of valid command strings:
 - ps aux | grep python: "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
 - running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"
-
 {}"#,
-            windows_shell_guidance()
-        )
-    } else {
-        r#"Runs a shell command and returns its output.
-- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
-            .to_string()
+                windows_shell_guidance_if_needed()
+            )
+        }
+        ShellType::Bash => format!(
+            r#"Runs a Bash command and returns its output.
+
+Examples of valid command strings:
+
+- ls -a (show hidden): "ls -la"
+- recursive find by name: "find . -name '*.py'"
+- recursive grep: "rg 'TODO' ."
+- ps aux | grep python: "ps aux | grep python"
+- setting an env var: "FOO=bar; echo \"$FOO\""
+- running an inline Python script: "python - <<'PY'\nprint('Hello, world!')\nPY"
+{}"#,
+            windows_shell_guidance_if_needed()
+        ),
+        ShellType::Zsh => format!(
+            r#"Runs a Zsh command and returns its output.
+
+Examples of valid command strings:
+
+- ls -a (show hidden): "ls -la"
+- recursive find by name: "find . -name '*.py'"
+- recursive grep: "rg 'TODO' ."
+- ps aux | grep python: "ps aux | grep python"
+- setting an env var: "FOO=bar; echo \"$FOO\""
+- running an inline Python script: "python - <<'PY'\nprint('Hello, world!')\nPY"
+{}"#,
+            windows_shell_guidance_if_needed()
+        ),
+        ShellType::Sh => format!(
+            r#"Runs an sh command and returns its output.
+
+Examples of valid command strings:
+
+- ls -a (show hidden): "ls -la"
+- recursive find by name: "find . -name '*.py'"
+- recursive grep: "grep -R 'TODO' ."
+- ps aux | grep python: "ps aux | grep python"
+- setting an env var: "FOO=bar; echo \"$FOO\""
+- running an inline Python script: "python - <<'PY'\nprint('Hello, world!')\nPY"
+{}"#,
+            windows_shell_guidance_if_needed()
+        ),
+        ShellType::Cmd => format!(
+            r#"Runs a cmd.exe command and returns its output.
+
+Examples of valid command strings:
+
+- dir /a (show hidden): "dir /a"
+- recursive find by name: "dir /s /b *.py"
+- recursive grep: "findstr /s /n /i TODO *"
+- tasklist | findstr python: "tasklist | findstr /i python"
+- setting an env var: "set FOO=bar && echo %FOO%"
+- running an inline Python script: "python -c \"print('Hello, world!')\""
+{}"#,
+            windows_shell_guidance_if_needed()
+        ),
     };
+    let description = format!(
+        r#"{description}
+- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell_command".to_string(),
@@ -399,11 +458,19 @@ fn file_system_permissions_schema() -> JsonSchema {
     schema
 }
 
+fn windows_shell_guidance_if_needed() -> String {
+    if cfg!(windows) {
+        format!("\n\n{}", windows_shell_guidance())
+    } else {
+        String::new()
+    }
+}
+
 fn windows_shell_guidance() -> &'static str {
     r#"Windows safety rules:
-- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.
+- Do not compose destructive filesystem commands across shells. Do not enumerate paths in one shell and then pass them to another shell for deletion or moving. Use one shell end-to-end, prefer the active shell's native path/literal APIs when available, and avoid string-built shell commands for file operations.
 - Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked.
-- When using `Start-Process` to launch a background helper or service, pass `-WindowStyle Hidden` unless the user explicitly asked for a visible interactive window. Use visible windows only for interactive tools the user needs to see or control."#
+- When launching a background helper or service, start it hidden or non-interactive unless the user explicitly asked for a visible interactive window. For PowerShell `Start-Process`, pass `-WindowStyle Hidden`. Use visible windows only for interactive tools the user needs to see or control."#
 }
 
 #[cfg(test)]

@@ -598,6 +598,7 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planne
         backend_config: shell_command_backend_for_features(features),
         allow_login_shell,
         exec_permission_approvals_enabled,
+        shell_type: turn_context.user_shell_type,
     };
 
     match shell_type_for_model_and_features(&turn_context.model_info, features) {

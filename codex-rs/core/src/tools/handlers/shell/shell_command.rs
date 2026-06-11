@@ -47,6 +47,7 @@ pub(crate) struct ShellCommandHandlerOptions {
     pub(crate) backend_config: ShellCommandBackendConfig,
     pub(crate) allow_login_shell: bool,
     pub(crate) exec_permission_approvals_enabled: bool,
+    pub(crate) shell_type: crate::shell::ShellType,
 }
 
 impl ShellCommandHandler {
@@ -120,6 +121,7 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
             backend_config,
             allow_login_shell: false,
             exec_permission_approvals_enabled: false,
+            shell_type: crate::shell::default_user_shell().shell_type,
         })
     }
 }
@@ -130,10 +132,13 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_shell_command_tool(CommandToolOptions {
-            allow_login_shell: self.options.allow_login_shell,
-            exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
-        })
+        create_shell_command_tool(
+            CommandToolOptions {
+                allow_login_shell: self.options.allow_login_shell,
+                exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
+            },
+            self.options.shell_type,
+        )
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

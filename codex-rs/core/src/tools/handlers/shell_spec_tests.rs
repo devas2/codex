@@ -201,13 +201,15 @@ fn request_permissions_tool_includes_full_permission_schema() {
 
 #[test]
 fn shell_command_tool_matches_expected_spec() {
-    let tool = create_shell_command_tool(CommandToolOptions {
-        allow_login_shell: true,
-        exec_permission_approvals_enabled: false,
-    });
+    let tool = create_shell_command_tool(
+        CommandToolOptions {
+            allow_login_shell: true,
+            exec_permission_approvals_enabled: false,
+        },
+        ShellType::PowerShell,
+    );
 
-    let description = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output.
+    let mut description = r#"Runs a PowerShell command and returns its output.
 
 Examples of valid command strings:
 
@@ -217,13 +219,13 @@ Examples of valid command strings:
 - ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
 - running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -""#
-            .to_string()
-            + &windows_shell_guidance_description()
-    } else {
-        r#"Runs a shell command and returns its output.
-- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
-            .to_string()
-    };
+        .to_string();
+    if cfg!(windows) {
+        description.push_str(&windows_shell_guidance_description());
+    }
+    description.push_str(
+        "\n- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary.",
+    );
 
     let mut properties = BTreeMap::from([
         (
@@ -271,4 +273,23 @@ Examples of valid command strings:
             output_schema: None,
         })
     );
+}
+
+#[test]
+fn shell_command_tool_uses_effective_bash_description() {
+    let tool = create_shell_command_tool(
+        CommandToolOptions {
+            allow_login_shell: false,
+            exec_permission_approvals_enabled: false,
+        },
+        ShellType::Bash,
+    );
+    let ToolSpec::Function(tool) = tool else {
+        panic!("shell_command should be a function tool");
+    };
+
+    assert!(tool.description.starts_with("Runs a Bash command"));
+    assert!(tool.description.contains(r#""ls -la""#));
+    assert!(!tool.description.contains("Runs a PowerShell command"));
+    assert!(!tool.description.contains("Get-ChildItem"));
 }
