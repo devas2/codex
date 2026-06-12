@@ -149,6 +149,7 @@ mod key_hint;
 mod keymap;
 mod keymap_setup;
 mod line_truncation;
+mod linux_do_latest;
 pub(crate) mod live_wrap;
 pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
@@ -181,6 +182,7 @@ mod session_state;
 mod shimmer;
 mod skills_helpers;
 mod slash_command;
+mod startup_dragon;
 mod startup_error;
 mod startup_hooks_review;
 mod status;
@@ -1367,6 +1369,9 @@ async fn run_ratatui_app(
         initialized_terminal.stderr_guard,
     );
     let mut terminal_restore_guard = TerminalRestoreGuard::new();
+    if initial_config.animations {
+        startup_dragon::run(&mut tui).await?;
+    }
 
     #[cfg(not(debug_assertions))]
     {

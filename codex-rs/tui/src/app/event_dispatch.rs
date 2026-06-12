@@ -778,6 +778,9 @@ impl App {
                     }
                 }
             },
+            AppEvent::LinuxDoLatestLoaded { result } => {
+                self.handle_linux_do_latest_loaded(tui, result);
+            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }

@@ -1702,6 +1702,12 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn set_linux_do_latest_line(&mut self, line: Option<Line<'static>>) {
+        if self.composer.set_linux_do_latest_line(line) {
+            self.request_redraw();
+        }
+    }
+
     /// Updates the contextual footer label and requests a redraw only when it changed.
     ///
     /// This keeps the footer plumbing cheap during thread transitions where `App` may recompute

@@ -1214,6 +1214,24 @@
       ],
       "description": "One action binding value in config.\n\nThis accepts either:\n\n1. A single key spec string (`\"ctrl-a\"`). 2. A list of key spec strings (`[\"ctrl-a\", \"alt-a\"]`).\n\nAn empty list explicitly unbinds the action in that scope. Because an explicit empty list is still a configured value, runtime resolution must not fall through to global or built-in defaults for that action."
     },
+    "LinuxDoLatestConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable the linux.do latest-topic footer row. Defaults to `true`.",
+          "type": "boolean"
+        },
+        "refresh_interval_secs": {
+          "default": 300,
+          "description": "Refresh interval in seconds. Defaults to 300 seconds.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2933,6 +2951,18 @@
             }
           },
           "description": "Keybinding overrides for the TUI.\n\nThis supports rebinding selected actions globally and by context. Context bindings take precedence over `global` bindings."
+        },
+        "linux_do_latest": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/LinuxDoLatestConfig"
+            }
+          ],
+          "default": {
+            "enabled": true,
+            "refresh_interval_secs": 300
+          },
+          "description": "linux.do latest-topic footer row settings."
         },
         "model_availability_nux": {
           "allOf": [

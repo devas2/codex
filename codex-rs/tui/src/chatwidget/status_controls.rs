@@ -74,6 +74,11 @@ impl ChatWidget {
         self.bottom_pane.set_status_line_hyperlink(url);
     }
 
+    /// Sets the linux.do latest-topic footer row.
+    pub(crate) fn set_linux_do_latest_line(&mut self, line: Option<Line<'static>>) {
+        self.bottom_pane.set_linux_do_latest_line(line);
+    }
+
     /// Forwards the contextual active-agent label into the bottom-pane footer pipeline.
     ///
     /// `ChatWidget` stays a pass-through here so `App` remains the owner of "which thread is the

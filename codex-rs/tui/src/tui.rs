@@ -615,6 +615,10 @@ impl Tui {
         self.alt_screen_active.load(Ordering::Relaxed)
     }
 
+    pub fn is_terminal_focused(&self) -> bool {
+        self.terminal_focused.load(Ordering::Relaxed)
+    }
+
     // Drop crossterm EventStream to avoid stdin conflicts with other processes.
     pub fn pause_events(&mut self) {
         self.event_broker.pause_events();

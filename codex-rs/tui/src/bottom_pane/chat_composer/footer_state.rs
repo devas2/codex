@@ -28,6 +28,7 @@ pub(super) struct FooterState {
     pub(super) status_line_value: Option<Line<'static>>,
     pub(super) status_line_hyperlink_url: Option<String>,
     pub(super) status_line_enabled: bool,
+    pub(super) linux_do_latest_line: Option<Line<'static>>,
     pub(super) side_conversation_context_label: Option<String>,
     pub(super) active_agent_label: Option<String>,
     pub(super) external_editor_key: Option<KeyBinding>,

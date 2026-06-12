@@ -15,6 +15,7 @@ pub(super) async fn make_test_app() -> App {
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let linux_do_latest = LinuxDoLatestRefreshState::from_config(&config.tui_linux_do_latest);
 
     App {
         model_catalog: chat_widget.model_catalog(),
@@ -66,6 +67,7 @@ pub(super) async fn make_test_app() -> App {
         pending_startup_thread_start: false,
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
+        linux_do_latest,
     }
 }
 

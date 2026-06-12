@@ -207,6 +207,7 @@ mod config_persistence;
 mod event_dispatch;
 mod history_ui;
 mod input;
+mod linux_do_latest;
 mod loaded_threads;
 mod pending_interactive_replay;
 mod pets;
@@ -226,6 +227,7 @@ mod thread_settings;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
+use self::linux_do_latest::LinuxDoLatestRefreshState;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 use self::platform_actions::*;
@@ -578,6 +580,8 @@ pub(crate) struct App {
     // Serialize hook enablement writes per hook so stale completions cannot
     // persist an older toggle after a newer one.
     pending_hook_enabled_writes: HashMap<String, Option<bool>>,
+
+    linux_do_latest: LinuxDoLatestRefreshState,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -992,6 +996,7 @@ See the Codex keymap documentation for supported actions and examples."
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
+        let linux_do_latest = LinuxDoLatestRefreshState::from_config(&config.tui_linux_do_latest);
         let mut app = Self {
             model_catalog,
             session_telemetry: session_telemetry.clone(),
@@ -1042,10 +1047,12 @@ See the Codex keymap documentation for supported actions and examples."
             pending_startup_thread_start,
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
+            linux_do_latest,
         };
         if let Some(entry) = startup_hooks_browser {
             app.chat_widget.open_hooks_browser(entry);
         }
+        app.maybe_refresh_linux_do_latest(tui, /*force*/ true);
         let initial_session_started_at = Instant::now();
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
@@ -1268,6 +1275,7 @@ See the Codex keymap documentation for supported actions and examples."
                         self.rebuild_transcript_after_backtrack(tui)?;
                         self.backtrack_render_pending = false;
                     }
+                    self.maybe_refresh_linux_do_latest(tui, /*force*/ false);
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget

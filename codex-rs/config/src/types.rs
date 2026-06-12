@@ -650,6 +650,33 @@ pub struct ModelAvailabilityNuxConfig {
 /// Fallback resize-reflow row cap when Codex cannot identify a terminal-specific scrollback size.
 pub const DEFAULT_TERMINAL_RESIZE_REFLOW_FALLBACK_MAX_ROWS: usize = 1_000;
 
+/// Default refresh interval for the linux.do latest-topic footer row.
+pub const DEFAULT_LINUX_DO_LATEST_REFRESH_INTERVAL_SECS: u64 = 300;
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct LinuxDoLatestConfig {
+    /// Enable the linux.do latest-topic footer row.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Refresh interval in seconds.
+    /// Defaults to 300 seconds.
+    #[serde(default = "default_linux_do_latest_refresh_interval_secs")]
+    #[schemars(range(min = 1))]
+    pub refresh_interval_secs: u64,
+}
+
+impl Default for LinuxDoLatestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            refresh_interval_secs: DEFAULT_LINUX_DO_LATEST_REFRESH_INTERVAL_SECS,
+        }
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -696,6 +723,10 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub status_line_use_colors: bool,
+
+    /// linux.do latest-topic footer row settings.
+    #[serde(default)]
+    pub linux_do_latest: LinuxDoLatestConfig,
 
     /// Ordered list of terminal title item identifiers.
     ///
@@ -750,6 +781,10 @@ pub struct Tui {
 
 const fn default_true() -> bool {
     true
+}
+
+const fn default_linux_do_latest_refresh_interval_secs() -> u64 {
+    DEFAULT_LINUX_DO_LATEST_REFRESH_INTERVAL_SECS
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

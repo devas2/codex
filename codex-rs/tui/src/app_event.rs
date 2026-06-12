@@ -316,6 +316,11 @@ pub(crate) enum AppEvent {
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 
+    /// Result of refreshing the linux.do latest-topic footer row.
+    LinuxDoLatestLoaded {
+        result: Result<crate::linux_do_latest::LinuxDoLatestFetchOutcome, String>,
+    },
+
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {
         credit_type: AddCreditsNudgeCreditType,

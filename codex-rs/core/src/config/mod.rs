@@ -39,6 +39,7 @@ use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::History;
+use codex_config::types::LinuxDoLatestConfig;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
 use codex_config::types::McpServerTransportConfig;
@@ -735,6 +736,9 @@ pub struct Config {
 
     /// Whether to color status line items with colors from the active syntax theme.
     pub tui_status_line_use_colors: bool,
+
+    /// linux.do latest-topic footer row settings.
+    pub tui_linux_do_latest: LinuxDoLatestConfig,
 
     /// Ordered list of terminal title item identifiers for the TUI.
     ///
@@ -3613,6 +3617,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.status_line_use_colors)
                 .unwrap_or(true),
+            tui_linux_do_latest: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.linux_do_latest.clone())
+                .unwrap_or_default(),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             tui_pet: cfg.tui.as_ref().and_then(|t| t.pet.clone()),

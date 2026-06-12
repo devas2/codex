@@ -504,6 +504,7 @@ impl ChatComposer {
                 status_line_value: None,
                 status_line_hyperlink_url: None,
                 status_line_enabled: false,
+                linux_do_latest_line: None,
                 side_conversation_context_label: None,
                 active_agent_label: None,
                 external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
@@ -737,8 +738,10 @@ impl ChatComposer {
         let footer_hint_height = self
             .custom_footer_height()
             .unwrap_or_else(|| footer_height(&footer_props));
-        let footer_spacing = Self::footer_spacing(footer_hint_height);
-        let footer_total_height = footer_hint_height + footer_spacing;
+        let linux_do_latest_height = self.linux_do_latest_footer_height();
+        let footer_content_height = footer_hint_height + linux_do_latest_height;
+        let footer_spacing = Self::footer_spacing(footer_content_height);
+        let footer_total_height = footer_content_height + footer_spacing;
         let popup_constraint = match &self.popups.active {
             ActivePopup::Command(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
@@ -786,6 +789,10 @@ impl ChatComposer {
         } else {
             FOOTER_SPACING_HEIGHT
         }
+    }
+
+    fn linux_do_latest_footer_height(&self) -> u16 {
+        u16::from(self.footer.linux_do_latest_line.is_some())
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -3918,6 +3925,14 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn set_linux_do_latest_line(&mut self, line: Option<Line<'static>>) -> bool {
+        if self.footer.linux_do_latest_line == line {
+            return false;
+        }
+        self.footer.linux_do_latest_line = line;
+        true
+    }
+
     pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) -> bool {
         if self.footer.side_conversation_context_label == label {
             return false;
@@ -4101,8 +4116,10 @@ impl ChatComposer {
         let footer_hint_height = self
             .custom_footer_height()
             .unwrap_or_else(|| footer_height(&footer_props));
-        let footer_spacing = Self::footer_spacing(footer_hint_height);
-        let footer_total_height = footer_hint_height + footer_spacing;
+        let linux_do_latest_height = self.linux_do_latest_footer_height();
+        let footer_content_height = footer_hint_height + linux_do_latest_height;
+        let footer_spacing = Self::footer_spacing(footer_content_height);
+        let footer_total_height = footer_content_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
         let inner_width =
             width.saturating_sub(COLS_WITH_MARGIN.saturating_add(textarea_right_reserve));
@@ -4179,20 +4196,34 @@ impl ChatComposer {
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(&footer_props));
-                let footer_spacing = Self::footer_spacing(footer_hint_height);
-                let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
-                    let [_, hint_rect] = Layout::vertical([
+                let linux_do_latest_line = self.footer.linux_do_latest_line.clone();
+                let linux_do_latest_height = u16::from(linux_do_latest_line.is_some());
+                let footer_content_height = footer_hint_height + linux_do_latest_height;
+                let footer_spacing = Self::footer_spacing(footer_content_height);
+                let footer_content_rect = if footer_spacing > 0 && footer_content_height > 0 {
+                    let [_, footer_content_rect] = Layout::vertical([
                         Constraint::Length(footer_spacing),
-                        Constraint::Length(footer_hint_height),
+                        Constraint::Length(footer_content_height),
                     ])
                     .areas(popup_rect);
-                    hint_rect
+                    footer_content_rect
                 } else {
                     popup_rect
                 };
-                if let Some(line) = self.history_search_footer_line() {
+                let [hint_rect, linux_do_latest_rect] = if linux_do_latest_height > 0 {
+                    Layout::vertical([
+                        Constraint::Length(footer_hint_height),
+                        Constraint::Length(linux_do_latest_height),
+                    ])
+                    .areas(footer_content_rect)
+                } else {
+                    [footer_content_rect, Rect::default()]
+                };
+                if footer_hint_height > 0
+                    && let Some(line) = self.history_search_footer_line()
+                {
                     render_footer_line(hint_rect, buf, line);
-                } else if self.footer.plan_mode_nudge_visible {
+                } else if footer_hint_height > 0 && self.footer.plan_mode_nudge_visible {
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
                     render_footer_line(
@@ -4203,7 +4234,7 @@ impl ChatComposer {
                             available_width,
                         ),
                     );
-                } else {
+                } else if footer_hint_height > 0 {
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
                     let status_line_active = uses_passive_footer_status_layout(&footer_props);
@@ -4382,6 +4413,17 @@ impl ChatComposer {
                     {
                         mark_underlined_hyperlink(buf, hint_rect, url);
                     }
+                }
+                if let Some(line) = linux_do_latest_line {
+                    let available_width = linux_do_latest_rect
+                        .width
+                        .saturating_sub(FOOTER_INDENT_COLS as u16)
+                        as usize;
+                    render_footer_line(
+                        linux_do_latest_rect,
+                        buf,
+                        truncate_line_with_ellipsis_if_overflow(line, available_width),
+                    );
                 }
             }
         }
@@ -4659,7 +4701,7 @@ mod tests {
         );
         setup(&mut composer);
         let footer_props = composer.footer_props();
-        let footer_lines = footer_height(&footer_props);
+        let footer_lines = footer_height(&footer_props) + composer.linux_do_latest_footer_height();
         let footer_spacing = ChatComposer::footer_spacing(footer_lines);
         let height = footer_lines + footer_spacing + 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -4815,6 +4857,27 @@ mod tests {
                 )));
                 composer.set_text_content("!".to_string(), Vec::new(), Vec::new());
                 let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            },
+        );
+
+        snapshot_composer_state_with_width(
+            "footer_linux_do_latest_line",
+            /*width*/ 64,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                let post = crate::linux_do_latest::LinuxDoLatestPost {
+                    author: "neo".to_string(),
+                    title: "A very long linux.do topic title that needs truncation".to_string(),
+                    last_posted_at: chrono::DateTime::parse_from_rfc3339("2026-06-11T07:40:00Z")
+                        .unwrap()
+                        .with_timezone(&chrono::Utc),
+                };
+                let now = chrono::DateTime::parse_from_rfc3339("2026-06-11T07:45:00Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc);
+                composer.set_linux_do_latest_line(Some(crate::linux_do_latest::line_for_post(
+                    &post, now,
+                )));
             },
         );
     }
