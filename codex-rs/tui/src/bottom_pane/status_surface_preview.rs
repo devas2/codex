@@ -35,6 +35,10 @@ pub(crate) enum StatusSurfacePreviewItem {
     ModelWithReasoning,
     Reasoning,
     TaskProgress,
+    Pet,
+    SessionCost,
+    CachedTokens,
+    CacheWriteTokens,
 }
 
 impl StatusSurfacePreviewItem {
@@ -57,9 +61,9 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::WeeklyLimit => "secondary 0%",
             StatusSurfacePreviewItem::CodexVersion => "0.0.0",
             StatusSurfacePreviewItem::ContextWindowSize => "0 window",
-            StatusSurfacePreviewItem::UsedTokens => "0 used",
-            StatusSurfacePreviewItem::TotalInputTokens => "0 in",
-            StatusSurfacePreviewItem::TotalOutputTokens => "0 out",
+            StatusSurfacePreviewItem::UsedTokens => "Total: 1.2M",
+            StatusSurfacePreviewItem::TotalInputTokens => "Input: 800K",
+            StatusSurfacePreviewItem::TotalOutputTokens => "Output: 120K",
             StatusSurfacePreviewItem::SessionId => "550e8400-e29b-41d4",
             StatusSurfacePreviewItem::FastMode => "Fast on",
             StatusSurfacePreviewItem::RawOutput => "raw output",
@@ -68,6 +72,10 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::ModelWithReasoning => "gpt-5.2-codex medium",
             StatusSurfacePreviewItem::Reasoning => "medium",
             StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
+            StatusSurfacePreviewItem::Pet => "🐱(^_^) ●●●●●●●●○○ 100.00 (0) 💖0",
+            StatusSurfacePreviewItem::SessionCost => "Cost: $0.00",
+            StatusSurfacePreviewItem::CachedTokens => "Cached: 300K",
+            StatusSurfacePreviewItem::CacheWriteTokens => "CacheWrite: 12K",
         }
     }
 
@@ -101,6 +109,10 @@ impl StatusSurfacePreviewItem {
             Self::ModelWithReasoning,
             Self::Reasoning,
             Self::TaskProgress,
+            Self::Pet,
+            Self::SessionCost,
+            Self::CachedTokens,
+            Self::CacheWriteTokens,
         ]
         .into_iter()
     }

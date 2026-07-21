@@ -1,9 +1,11 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 3291
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.4 xhigh fast · Context 0% used · /tmp/project                           "
+"  Context 0% used                                                               "
+"  gpt-5.4 xhigh fast · /tmp/project                                             "

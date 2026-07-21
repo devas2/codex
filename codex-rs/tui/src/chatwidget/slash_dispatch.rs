@@ -470,6 +470,9 @@ impl ChatWidget {
             SlashCommand::Pets => {
                 self.open_pets_picker();
             }
+            SlashCommand::Ccpet => {
+                self.handle_ccpet_command(/*args*/ "");
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
@@ -895,6 +898,9 @@ impl ChatWidget {
             SlashCommand::Pets if !trimmed.is_empty() => {
                 self.select_pet_by_id(args);
             }
+            SlashCommand::Ccpet if !trimmed.is_empty() => {
+                self.handle_ccpet_command(&args);
+            }
             _ => self.dispatch_command(cmd),
         }
         if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
@@ -1063,6 +1069,7 @@ impl ChatWidget {
             | SlashCommand::Diff
             | SlashCommand::App
             | SlashCommand::Rename
+            | SlashCommand::Ccpet
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New
@@ -1151,5 +1158,32 @@ impl ChatWidget {
         ));
         self.bottom_pane.drain_pending_submission_state();
         false
+    }
+
+    /// Status-line virtual pet controls (`/ccpet [status|reset]`).
+    ///
+    /// Separate from ambient image pets (`/pets`).
+    fn handle_ccpet_command(&mut self, args: &str) {
+        let action = args.trim().to_ascii_lowercase();
+        match action.as_str() {
+            "" | "status" | "check" => {
+                let summary = self.status_pet.status_summary();
+                self.add_info_message(summary, /*hint*/ None);
+            }
+            "reset" | "restart" | "new" => {
+                self.status_pet.reset();
+                self.refresh_status_surfaces();
+                let summary = self.status_pet.status_summary();
+                self.add_info_message(
+                    format!("Status pet reset. {summary}"),
+                    Some("Previous pet saved to $CODEX_HOME/ccpet/graveyard/".to_string()),
+                );
+            }
+            other => {
+                self.add_error_message(format!(
+                    "Unknown /ccpet argument '{other}'. Usage: /ccpet [status|reset]"
+                ));
+            }
+        }
     }
 }

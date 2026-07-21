@@ -12,6 +12,8 @@ const BASELINE_TOKENS: i64 = 12000;
 pub struct TokenUsage {
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
+    #[serde(default)]
+    pub cache_write_input_tokens: i64,
     pub output_tokens: i64,
     pub reasoning_output_tokens: i64,
     pub total_tokens: i64,
@@ -26,8 +28,25 @@ impl TokenUsage {
         self.cached_input_tokens.max(0)
     }
 
+    pub(crate) fn cache_write_input(&self) -> i64 {
+        self.cache_write_input_tokens.max(0)
+    }
+
     pub(crate) fn non_cached_input(&self) -> i64 {
         (self.input_tokens - self.cached_input()).max(0)
+    }
+
+    /// Input tokens billed neither as cache hits nor cache writes.
+    ///
+    /// OpenAI reports `cached_tokens` and `cache_write_tokens` as subsets of
+    /// `input_tokens`, so this subtracts both.
+    pub(crate) fn uncached_input(&self) -> i64 {
+        (self.input_tokens - self.cached_input() - self.cache_write_input()).max(0)
+    }
+
+    /// Total tokens that count toward pet feeding (all input + output).
+    pub(crate) fn billable_tokens(&self) -> i64 {
+        (self.input_tokens.max(0) + self.output_tokens.max(0)).max(0)
     }
 
     pub(crate) fn blended_total(&self) -> i64 {

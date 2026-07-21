@@ -142,6 +142,18 @@ pub(crate) enum StatusLineItem {
 
     /// Latest checklist task progress from `update_plan` (if available).
     TaskProgress,
+
+    /// Status-line virtual pet (ccpet-style energy + expression).
+    Pet,
+
+    /// Estimated session cost in USD (API-style rates, includes cache write).
+    SessionCost,
+
+    /// Cached input tokens used in the session.
+    CachedTokens,
+
+    /// Cache-write input tokens used in the session.
+    CacheWriteTokens,
 }
 
 impl StatusLineItem {
@@ -179,9 +191,11 @@ impl StatusLineItem {
             StatusLineItem::ContextWindowSize => {
                 "Total context window size in tokens (omitted when unknown)"
             }
-            StatusLineItem::UsedTokens => "Total tokens used in session (omitted when zero)",
-            StatusLineItem::TotalInputTokens => "Total input tokens used in session",
-            StatusLineItem::TotalOutputTokens => "Total output tokens used in session",
+            StatusLineItem::UsedTokens => {
+                "Session total tokens as Total: N (input+output+cached; omitted when zero)"
+            }
+            StatusLineItem::TotalInputTokens => "Session input tokens as Input: N",
+            StatusLineItem::TotalOutputTokens => "Session output tokens as Output: N",
             StatusLineItem::SessionId => "Current thread identifier (omitted until thread starts)",
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
             StatusLineItem::RawOutput => "Whether raw scrollback mode is active",
@@ -194,6 +208,14 @@ impl StatusLineItem {
             StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
             }
+            StatusLineItem::Pet => {
+                "Status-line virtual pet (energy decays over time, rises with tokens)"
+            }
+            StatusLineItem::SessionCost => {
+                "Estimated session cost as Cost: $N (API rates, includes cache write)"
+            }
+            StatusLineItem::CachedTokens => "Cached input tokens as Cached: N",
+            StatusLineItem::CacheWriteTokens => "Cache-write tokens as CacheWrite: N",
         }
     }
 
@@ -225,6 +247,10 @@ impl StatusLineItem {
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
             StatusLineItem::WorkspaceHeadline => StatusSurfacePreviewItem::WorkspaceHeadline,
             StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
+            StatusLineItem::Pet => StatusSurfacePreviewItem::Pet,
+            StatusLineItem::SessionCost => StatusSurfacePreviewItem::SessionCost,
+            StatusLineItem::CachedTokens => StatusSurfacePreviewItem::CachedTokens,
+            StatusLineItem::CacheWriteTokens => StatusSurfacePreviewItem::CacheWriteTokens,
         }
     }
 }

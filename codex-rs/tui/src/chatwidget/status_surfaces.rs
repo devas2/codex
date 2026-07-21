@@ -4,7 +4,7 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
-use crate::bottom_pane::status_line_from_segments;
+use crate::bottom_pane::status_lines_from_segments;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
@@ -190,7 +190,7 @@ impl ChatWidget {
             }
         }
 
-        self.set_status_line(status_line_from_segments(
+        self.set_status_line(status_lines_from_segments(
             segments,
             self.config.tui_status_line_use_colors,
         ));
@@ -686,11 +686,15 @@ impl ChatWidget {
             StatusLineItem::ApprovalMode => Some(approval_mode_display(&self.config)),
             StatusLineItem::UsedTokens => {
                 let usage = self.status_line_total_usage();
-                let total = usage.blended_total();
+                // Match ccpet "Total": input + output + cached for display parity.
+                let total = (usage.input_tokens.max(0)
+                    + usage.output_tokens.max(0)
+                    + usage.cached_input().max(0))
+                .max(0);
                 if total <= 0 {
                     None
                 } else {
-                    Some(format!("{} used", format_tokens_compact(total)))
+                    Some(format!("Total: {}", format_tokens_compact(total)))
                 }
             }
             StatusLineItem::ContextRemaining => self
@@ -719,14 +723,28 @@ impl ChatWidget {
             StatusLineItem::ContextWindowSize => self
                 .status_line_context_window_size()
                 .map(|cws| format!("{} window", format_tokens_compact(cws))),
-            StatusLineItem::TotalInputTokens => Some(format!(
-                "{} in",
-                format_tokens_compact(self.status_line_total_usage().input_tokens)
-            )),
-            StatusLineItem::TotalOutputTokens => Some(format!(
-                "{} out",
-                format_tokens_compact(self.status_line_total_usage().output_tokens)
-            )),
+            StatusLineItem::TotalInputTokens => {
+                let usage = self.status_line_total_usage();
+                if usage.is_zero() {
+                    None
+                } else {
+                    Some(format!(
+                        "Input: {}",
+                        format_tokens_compact(usage.input_tokens)
+                    ))
+                }
+            }
+            StatusLineItem::TotalOutputTokens => {
+                let usage = self.status_line_total_usage();
+                if usage.is_zero() {
+                    None
+                } else {
+                    Some(format!(
+                        "Output: {}",
+                        format_tokens_compact(usage.output_tokens)
+                    ))
+                }
+            }
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
             StatusLineItem::FastMode => Some(
                 if self.current_service_tier() == Some(ServiceTier::Fast.request_value()) {
@@ -749,6 +767,40 @@ impl ChatWidget {
             ),
             StatusLineItem::WorkspaceHeadline => self.status_line_workspace_headline.clone(),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
+            StatusLineItem::Pet => Some(self.status_pet.pet_status_line()),
+            StatusLineItem::SessionCost => {
+                let usage = self.status_line_total_usage();
+                if usage.is_zero() && self.status_pet.session_cost_usd() <= 0.0 {
+                    None
+                } else {
+                    let model = self.current_model().to_string();
+                    self.status_pet
+                        .set_session_cost_from_usage(&model, &usage);
+                    self.status_pet.session_cost_line()
+                }
+            }
+            StatusLineItem::CachedTokens => {
+                let cached = self.status_line_total_usage().cached_input();
+                if cached <= 0 {
+                    None
+                } else {
+                    Some(format!(
+                        "Cached: {}",
+                        format_tokens_compact(cached)
+                    ))
+                }
+            }
+            StatusLineItem::CacheWriteTokens => {
+                let writes = self.status_line_total_usage().cache_write_input();
+                if writes <= 0 {
+                    None
+                } else {
+                    Some(format!(
+                        "CacheWrite: {}",
+                        format_tokens_compact(writes)
+                    ))
+                }
+            }
         }
     }
 
@@ -792,6 +844,10 @@ impl ChatWidget {
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
             StatusSurfacePreviewItem::Reasoning => StatusLineItem::Reasoning,
+            StatusSurfacePreviewItem::Pet => StatusLineItem::Pet,
+            StatusSurfacePreviewItem::SessionCost => StatusLineItem::SessionCost,
+            StatusSurfacePreviewItem::CachedTokens => StatusLineItem::CachedTokens,
+            StatusSurfacePreviewItem::CacheWriteTokens => StatusLineItem::CacheWriteTokens,
         };
         self.status_line_value_for_item(status_line_item)
     }

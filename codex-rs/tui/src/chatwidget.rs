@@ -480,7 +480,18 @@ const ASK_FOR_APPROVAL_LABEL: &str = "Ask for approval";
 const APPROVE_FOR_ME_LABEL: &str = "Approve for me";
 const AUTO_REVIEW_DESCRIPTION: &str = "Only ask for actions detected as potentially unsafe.";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
+/// Default multi-line status surface (ccpet-style):
+/// 1) pet · 2) Input/Output/Cached/Total · 3) Cost · 4) model/path context.
+const DEFAULT_STATUS_LINE_ITEMS: [&str; 8] = [
+    "pet",
+    "total-input-tokens",
+    "total-output-tokens",
+    "cached-tokens",
+    "used-tokens",
+    "session-cost",
+    "model-with-reasoning",
+    "current-dir",
+];
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
@@ -556,6 +567,8 @@ pub(crate) struct ChatWidget {
     runtime_model_provider_base_url: Option<String>,
     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     token_info: Option<TokenUsageInfo>,
+    /// Status-line virtual pet (ccpet) with session cost estimates.
+    status_pet: crate::status_pet::StatusPetController,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
@@ -918,6 +931,7 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
             total_tokens: token_usage.total.total_tokens,
             input_tokens: token_usage.total.input_tokens,
             cached_input_tokens: token_usage.total.cached_input_tokens,
+            cache_write_input_tokens: token_usage.total.cache_write_input_tokens,
             output_tokens: token_usage.total.output_tokens,
             reasoning_output_tokens: token_usage.total.reasoning_output_tokens,
         },
@@ -925,6 +939,7 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
             total_tokens: token_usage.last.total_tokens,
             input_tokens: token_usage.last.input_tokens,
             cached_input_tokens: token_usage.last.cached_input_tokens,
+            cache_write_input_tokens: token_usage.last.cache_write_input_tokens,
             output_tokens: token_usage.last.output_tokens,
             reasoning_output_tokens: token_usage.last.reasoning_output_tokens,
         },
@@ -1145,7 +1160,11 @@ impl ChatWidget {
         let percent = self.context_remaining_percent(&info);
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
         self.bottom_pane.set_context_window(percent, used_tokens);
+        let model = self.current_model().to_string();
+        self.status_pet
+            .on_token_usage(&model, &info.total_token_usage);
         self.token_info = Some(info);
+        self.refresh_status_surfaces();
     }
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {

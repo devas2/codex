@@ -91,6 +91,7 @@ impl ChatWidget {
             frame_requester.clone(),
             app_event_tx.clone(),
         );
+        let status_pet = crate::status_pet::StatusPetController::load(&config.codex_home);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -123,6 +124,7 @@ impl ChatWidget {
             runtime_model_provider_base_url,
             remote_connection: None,
             token_info: None,
+            status_pet,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,

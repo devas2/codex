@@ -78,6 +78,7 @@ pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 pub(crate) use status_line_style::status_line_from_segments;
+pub(crate) use status_line_style::status_lines_from_segments;
 mod bottom_pane_view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1787,7 +1788,7 @@ impl BottomPane {
             .cursor_style(area)
     }
 
-    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Vec<Line<'static>>>) {
         if self.composer.set_status_line(status_line) {
             self.request_redraw();
         }

@@ -55,6 +55,8 @@ pub enum SlashCommand {
     Theme,
     #[strum(to_string = "pets", serialize = "pet")]
     Pets,
+    /// Status-line virtual pet (ccpet) — separate from ambient image `/pets`.
+    Ccpet,
     Mcp,
     Apps,
     Plugins,
@@ -109,6 +111,9 @@ impl SlashCommand {
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Pets => "choose or hide the terminal pet",
+            SlashCommand::Ccpet => {
+                "status-line virtual pet: /ccpet [status|reset]"
+            }
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
@@ -163,6 +168,7 @@ impl SlashCommand {
                 | SlashCommand::Raw
                 | SlashCommand::Usage
                 | SlashCommand::Pets
+                | SlashCommand::Ccpet
                 | SlashCommand::Side
                 | SlashCommand::Btw
                 | SlashCommand::Resume
@@ -239,7 +245,7 @@ impl SlashCommand {
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
-            SlashCommand::Theme | SlashCommand::Pets => false,
+            SlashCommand::Theme | SlashCommand::Pets | SlashCommand::Ccpet => false,
         }
     }
 
