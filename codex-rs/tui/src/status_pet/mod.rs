@@ -16,6 +16,7 @@ use chrono::Utc;
 use crate::token_usage::TokenUsage;
 
 pub(crate) use format::format_pet_line;
+pub(crate) use format::format_pet_line_colored;
 pub(crate) use format::format_session_cost_usd;
 pub(crate) use format::format_token_count;
 pub(crate) use pricing::estimate_session_cost_usd;
@@ -87,7 +88,13 @@ impl StatusPetController {
 
     pub(crate) fn pet_status_line(&mut self) -> String {
         self.prepare_for_display();
-        format_pet_line(&self.state, self.animation_frame)
+        format_pet_line(&self.state, /*frame_index*/ 0)
+    }
+
+    /// Colored pet row for the multi-line status surface.
+    pub(crate) fn pet_status_line_colored(&mut self) -> ratatui::text::Line<'static> {
+        self.prepare_for_display();
+        format_pet_line_colored(&self.state)
     }
 
     pub(crate) fn session_cost_line(&self) -> Option<String> {

@@ -4,7 +4,7 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
-use crate::bottom_pane::status_lines_from_segments;
+use crate::bottom_pane::status_lines_from_segments_with_pet;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
@@ -184,14 +184,21 @@ impl ChatWidget {
         }
 
         let mut segments = Vec::new();
+        let mut pet_row = None;
         for item in &selections.status_line_items {
+            if *item == StatusLineItem::Pet {
+                // Multi-color pet line (expression / bar / energy / tokens / lifetime).
+                pet_row = Some(self.status_pet.pet_status_line_colored());
+                continue;
+            }
             if let Some(value) = self.status_line_value_for_item(*item) {
                 segments.push((*item, value));
             }
         }
 
-        self.set_status_line(status_lines_from_segments(
+        self.set_status_line(status_lines_from_segments_with_pet(
             segments,
+            pet_row,
             self.config.tui_status_line_use_colors,
         ));
         let hyperlink_url = selections

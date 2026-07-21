@@ -19,7 +19,6 @@ enum StatusLineAccent {
     Path,
     Branch,
     State,
-    Usage,
     /// Virtual-pet composite (ccpet yellow expression).
     Pet,
     /// Session cost (ccpet gold).
@@ -80,7 +79,7 @@ impl StatusLineAccent {
             Self::Path => &["string", "markup.underline.link"],
             Self::Branch => &["entity.name.function", "entity.name.tag"],
             Self::State => &["keyword.control", "keyword"],
-            Self::Usage | Self::Total | Self::Progress => &["constant.numeric", "constant"],
+            Self::Total | Self::Progress => &["constant.numeric", "constant"],
             Self::Pet => &["markup.heading", "entity.name.section"],
             Self::Cost => &["string.regexp", "constant.character"],
             Self::Input => &["markup.inserted", "string"],
@@ -100,7 +99,7 @@ impl StatusLineAccent {
             Self::Model | Self::State | Self::Mode => Style::default().cyan(),
             Self::Path => Style::default().green(),
             Self::Branch | Self::Limit | Self::Thread => Style::default().magenta(),
-            Self::Usage | Self::Progress => Style::default().green(),
+            Self::Progress => Style::default().green(),
             // ccpet: PET_EXPRESSION yellow bright bold
             Self::Pet => Style::default().light_yellow().bold(),
             // ccpet COST gold → yellow
@@ -198,9 +197,29 @@ pub(crate) fn status_lines_from_segments<I>(
 where
     I: IntoIterator<Item = (StatusLineItem, String)>,
 {
-    status_lines_from_segments_with_resolver(segments, use_theme_colors, |accent| {
-        foreground_style_for_scopes(accent.scopes())
-    })
+    status_lines_from_segments_with_pet(
+        segments,
+        /*pet_row*/ None,
+        use_theme_colors,
+    )
+}
+
+/// Like [`status_lines_from_segments`], but injects a pre-colored pet row as line 1
+/// when `pet_row` is `Some` (and any `StatusLineItem::Pet` text segments are skipped).
+pub(crate) fn status_lines_from_segments_with_pet<I>(
+    segments: I,
+    pet_row: Option<Line<'static>>,
+    use_theme_colors: bool,
+) -> Option<Vec<Line<'static>>>
+where
+    I: IntoIterator<Item = (StatusLineItem, String)>,
+{
+    status_lines_from_segments_with_resolver(
+        segments,
+        pet_row,
+        use_theme_colors,
+        |accent| foreground_style_for_scopes(accent.scopes()),
+    )
 }
 
 fn status_line_from_segments_with_resolver<I, F>(
@@ -251,6 +270,7 @@ where
 
 fn status_lines_from_segments_with_resolver<I, F>(
     segments: I,
+    pet_row: Option<Line<'static>>,
     use_theme_colors: bool,
     theme_style_for_accent: F,
 ) -> Option<Vec<Line<'static>>>
@@ -264,6 +284,10 @@ where
     let mut ambient_spans = Vec::new();
 
     for (item, text) in segments {
+        // Prefer the pre-colored pet row when provided.
+        if item == StatusLineItem::Pet && pet_row.is_some() {
+            continue;
+        }
         let spans = match StatusLineRow::for_item(item) {
             StatusLineRow::Pet => &mut pet_spans,
             StatusLineRow::SessionTokens => &mut session_token_spans,
@@ -278,8 +302,12 @@ where
     }
 
     let mut lines = Vec::new();
+    if let Some(pet_row) = pet_row {
+        lines.push(pet_row);
+    } else if !pet_spans.is_empty() {
+        lines.push(Line::from(pet_spans));
+    }
     for spans in [
-        pet_spans,
         session_token_spans,
         cost_and_context_spans,
         ambient_spans,
